@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>등락율상위분석 - 주식분석 웹앱</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('top_rate_analysis.static', filename='css/top_rate_analysis.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- 좌측 사이드바 -->
+        <div class="sidebar">
+            <div class="logo">📊 주식분석</div>
+            <a href="/" class="menu-item">🏠 대시보드</a>
+            <div class="menu-item">📈 종목설정</div>
+            <div class="menu-item active">🔥 등락율상위</div>
+            <div class="menu-item">📊 신고가분석</div>
+            <div class="menu-item">💰 수급분석</div>
+        </div>
+
+        <!-- 메인 컨텐츠 -->
+        <div class="main-content">
+            <!-- 헤더 -->
+            <div class="header">
+                <h1>🔥 등락율상위분석</h1>
+                <p>실시간 업종별 상위 종목 및 AI 기반 투자 분석</p>
+            </div>
+
+            <!-- 컨트롤 버튼 -->
+            <div class="controls">
+                <button class="btn btn-primary" onclick="startCrawling()">📡 업종 데이터 수집</button>
+                <button class="btn btn-success" onclick="startAIAnalysis()" disabled id="aiBtn">🤖 AI 분석 시작</button>
+                <button class="btn btn-warning" onclick="startChartAnalysis()" disabled id="chartBtn">📊 차트 분석</button>
+                <select class="btn update-schedule" onchange="setUpdateSchedule(this.value)">
+                    <option value="manual">수동 업데이트</option>
+                    <option value="1h">1시간마다</option>
+                    <option value="4h">4시간마다</option>
+                    <option value="daily">일일 업데이트</option>
+                </select>
+            </div>
+
+            <!-- 상태 표시 -->
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-value" id="totalSectors">0</div>
+                    <div class="status-label">분석 업종</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="totalNewsStocks">0</div>
+                    <div class="status-label">뉴스 수집 종목</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="totalAnalyzedStocks">0</div>
+                    <div class="status-label">신고가 검토 종목</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="newHighStocks">0</div>
+                    <div class="status-label">신고가 달성</div>
+                </div>
+            </div>
+
+            <!-- 업종별 현황 -->
+            <div class="section-card" id="sectorsSection" style="display: none;">
+                <div class="section-header">📈 상위 5개 업종 현황</div>
+                <div class="section-content">
+                    <div class="sector-list" id="sectorList">
+                        <!-- 업종 데이터가 여기에 동적으로 추가됩니다 -->
+                    </div>
+
+                    <!-- 종목 상세 테이블 -->
+                    <table class="stock-table" id="stockTable" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>종목명</th>
+                                <th>업종</th>
+                                <th>현재가</th>
+                                <th>등락율</th>
+                                <th>수급분석</th>
+                                <th>수급단계</th>
+                                <th>종합점수</th>
+                                <th>주요뉴스</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stockTableBody">
+                            <!-- 종목 데이터가 여기에 동적으로 추가됩니다 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- AI 분석 결과 -->
+            <div class="ai-analysis" style="display: none;" id="aiAnalysis">
+                <h3>🤖 AI 투자 분석 리포트</h3>
+                <div class="analysis-content" id="aiAnalysisContent">
+                    <!-- AI 분석 결과가 여기에 표시됩니다 -->
+                </div>
+            </div>
+
+            <!-- 수급 분석 대시보드 -->
+            <div class="supply-dashboard" style="display: none;" id="supplyDashboard">
+                <h3 style="color: #2c3e50; margin-bottom: 20px;">📊 실시간 수급 분석 대시보드</h3>
+                <div class="supply-grid" id="supplyGrid">
+                    <!-- 수급 데이터가 여기에 표시됩니다 -->
+                </div>
+            </div>
+
+            <!-- 차트 분석 -->
+            <div class="section-card" style="display: none;" id="chartSection">
+                <div class="section-header">📊 기술적 분석 - 신고가 종목</div>
+                <div class="section-content">
+                    <div class="chart-grid" id="chartGrid">
+                        <!-- 차트가 여기에 동적으로 추가됩니다 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 로딩 상태 -->
+            <div class="loading" id="loadingState" style="display: none;">
+                <div class="spinner"></div>
+                <p id="loadingMessage">데이터를 분석하고 있습니다...</p>
+            </div>
+
+            <!-- 알림 메시지 -->
+            <div class="alert" id="alertMessage" style="display: none;">
+                <span id="alertText"></span>
+                <button onclick="hideAlert()">&times;</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 전역 변수
+        let statusCheckInterval;
+        let currentAnalysisId = null;
+
+        // 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            checkStatus();
+            startStatusMonitoring();
+        });
+
+        // 업종 데이터 수집 시작
+        async function startCrawling() {
+            try {
+                showLoading('업종 데이터를 수집하고 있습니다...');
+
+                const response = await fetch('/top-rate/crawl-sectors', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentAnalysisId = result.analysis_id;
+                    showAlert(result.message, 'success');
+                } else {
+                    showAlert(result.message, 'error');
+                    hideLoading();
+                }
+
+            } catch (error) {
+                console.error('크롤링 시작 실패:', error);
+                showAlert('크롤링 시작에 실패했습니다.', 'error');
+                hideLoading();
+            }
+        }
+
+        // AI 분석 시작
+        async function startAIAnalysis() {
+            try {
+                showLoading('AI가 뉴스와 재료를 분석하고 있습니다...');
+
+                const response = await fetch('/top-rate/analyze-ai', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                } else {
+                    showAlert(result.message, 'error');
+                    hideLoading();
+                }
+
+            } catch (error) {
+                console.error('AI 분석 시작 실패:', error);
+                showAlert('AI 분석 시작에 실패했습니다.', 'error');
+                hideLoading();
+            }
+        }
+
+        // 차트 분석 시작
+        async function startChartAnalysis() {
+            try {
+                showLoading('신고가 종목을 분석하고 차트를 생성하고 있습니다...');
+
+                const response = await fetch('/top-rate/generate-charts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                } else {
+                    showAlert(result.message, 'error');
+                    hideLoading();
+                }
+
+            } catch (error) {
+                console.error('차트 분석 시작 실패:', error);
+                showAlert('차트 분석 시작에 실패했습니다.', 'error');
+                hideLoading();
+            }
+        }
+
+        // 상태 확인
+        async function checkStatus() {
+            try {
+                const response = await fetch('/top-rate/status');
+                const status = await response.json();
+
+                updateStatusDisplay(status);
+                updateButtonStates(status);
+
+                // 완료 상태 확인
+                if (status.crawl_status === 'completed') {
+                    hideLoading();
+                    await loadResults();
+                }
+
+            } catch (error) {
+                console.error('상태 확인 실패:', error);
+            }
+        }
+
+        // 상태 표시 업데이트
+        function updateStatusDisplay(status) {
+            document.getElementById('totalSectors').textContent = status.statistics.total_sectors;
+            document.getElementById('totalNewsStocks').textContent = status.statistics.total_news_stocks;
+            document.getElementById('totalAnalyzedStocks').textContent = status.statistics.total_analyzed_stocks;
+            document.getElementById('newHighStocks').textContent = status.statistics.new_high_stocks_count;
+        }
+
+        // 버튼 상태 업데이트
+        function updateButtonStates(status) {
+            const aiBtn = document.getElementById('aiBtn');
+            const chartBtn = document.getElementById('chartBtn');
+
+            if (status.crawl_status === 'completed') {
+                aiBtn.disabled = false;
+                chartBtn.disabled = false;
+            }
+        }
+
+        // 결과 로드
+        async function loadResults() {
+            try {
+                const response = await fetch('/top-rate/results');
+                const result = await response.json();
+
+                if (result.success) {
+                    displaySectors(result.data.sectors);
+
+                    if (result.data.ai_analysis) {
+                        displayAIAnalysis(result.data.ai_analysis);
+                    }
+
+                    if (result.data.charts && result.data.charts.length > 0) {
+                        displayCharts(result.data.charts);
+                    }
+                }
+
+            } catch (error) {
+                console.error('결과 로드 실패:', error);
+            }
+        }
+
+        // 업종 데이터 표시
+        function displaySectors(sectors) {
+            const sectorList = document.getElementById('sectorList');
+            const stockTableBody = document.getElementById('stockTableBody');
+
+            sectorList.innerHTML = '';
+            stockTableBody.innerHTML = '';
+
+            // 업종 카드 생성
+            sectors.forEach(sector => {
+                const sectorCard = document.createElement('div');
+                sectorCard.className = 'sector-item';
+                sectorCard.innerHTML = `
+                    <div class="sector-name">${sector.sector_name}</div>
+                    <div class="sector-change ${sector.is_positive ? 'positive' : 'negative'}">${sector.formatted_change_rate}</div>
+                    <div>상위종목: ${sector.top_stocks.map(s => s.stock_name).join(', ')}</div>
+                `;
+                sectorList.appendChild(sectorCard);
+
+                // 종목 테이블 행 생성
+                sector.top_stocks.forEach(stock => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td><strong>${stock.stock_name}</strong></td>
+                        <td>${sector.sector_name}</td>
+                        <td>${stock.formatted_price}<br><span class="${stock.is_positive ? 'positive' : 'negative'}">${stock.formatted_change_rate}</span></td>
+                        <td>${stock.volume.toLocaleString()}주</td>
+                        <td>
+                            <div class="supply-indicator">
+                                ${stock.supply_badges.map(badge => `<span class="supply-badge ${badge.class}">${badge.text}</span>`).join('')}
+                            </div>
+                        </td>
+                        <td>
+                            <div class="supply-stage">
+                                <span class="stage-icon stage-${stock.supply_stage}">${stock.supply_stage}</span>
+                                ${getStageText(stock.supply_stage)}
+                            </div>
+                        </td>
+                        <td>
+                            <div class="total-score">
+                                <div class="score-circle ${getScoreClass(stock.score_grade)}">${stock.score_grade}</div>
+                                <small>${stock.total_score}점</small>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="news-links">
+                                ${stock.news_list.map(news => `<a href="${news.url}" class="news-link" target="_blank">${news.title}</a>`).join('')}
+                            </div>
+                        </td>
+                    `;
+                    stockTableBody.appendChild(row);
+                });
+            });
+
+            document.getElementById('sectorsSection').style.display = 'block';
+            document.getElementById('stockTable').style.display = 'table';
+        }
+
+        // AI 분석 결과 표시
+        function displayAIAnalysis(aiAnalysis) {
+            const content = document.getElementById('aiAnalysisContent');
+            content.innerHTML = `
+                <p><strong>🔥 핵심 투자 포인트</strong></p>
+                <p>${aiAnalysis.summary}</p>
+
+                <div style="margin: 15px 0;">
+                    ${aiAnalysis.keywords.map(keyword => `<span class="keyword-tag">${keyword}</span>`).join('')}
+                </div>
+
+                <p><strong>📊 수급 종합 분석:</strong></p>
+                <p>${aiAnalysis.supply_analysis}</p>
+
+                ${aiAnalysis.key_points.length > 0 ? `
+                <p><strong>💡 주요 포인트:</strong></p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    ${aiAnalysis.key_points.map(point => `<li>${point}</li>`).join('')}
+                </ul>
+                ` : ''}
+
+                ${aiAnalysis.risk_factors.length > 0 ? `
+                <p><strong>⚠️ 주의사항:</strong></p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    ${aiAnalysis.risk_factors.map(risk => `<li>${risk}</li>`).join('')}
+                </ul>
+                ` : ''}
+
+                <p><strong>🎯 투자 전략:</strong> ${aiAnalysis.investment_recommendation}</p>
+                <p><strong>신뢰도:</strong> ${aiAnalysis.confidence_score}%</p>
+            `;
+
+            document.getElementById('aiAnalysis').style.display = 'block';
+        }
+
+        // 차트 표시
+        function displayCharts(charts) {
+            const chartGrid = document.getElementById('chartGrid');
+            chartGrid.innerHTML = '';
+
+            charts.forEach((chartData, index) => {
+                // 가격 차트
+                const priceChartContainer = document.createElement('div');
+                priceChartContainer.className = 'chart-item';
+                priceChartContainer.innerHTML = `
+                    <div class="chart-title">${chartData.stock_name} - 가격 집중구간</div>
+                    <canvas id="priceChart${index}" width="400" height="300"></canvas>
+                `;
+                chartGrid.appendChild(priceChartContainer);
+
+                // 수급 차트
+                const supplyChartContainer = document.createElement('div');
+                supplyChartContainer.className = 'chart-item';
+                supplyChartContainer.innerHTML = `
+                    <div class="chart-title">${chartData.stock_name} - 수급 분석</div>
+                    <canvas id="supplyChart${index}" width="400" height="300"></canvas>
+                `;
+                chartGrid.appendChild(supplyChartContainer);
+
+                // 차트 생성
+                createPriceChart(`priceChart${index}`, chartData.price_chart);
+                createSupplyChart(`supplyChart${index}`, chartData.supply_chart);
+            });
+
+            document.getElementById('chartSection').style.display = 'block';
+        }
+
+        // 가격 차트 생성
+        function createPriceChart(canvasId, chartData) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false
+                        }
+                    }
+                }
+            });
+        }
+
+        // 수급 차트 생성
+        function createSupplyChart(canvasId, chartData) {
+            if (!chartData || !chartData.labels) return;
+
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 헬퍼 함수들
+        function getStageText(stage) {
+            const stages = {
+                1: '기반단계',
+                2: '투신단계',
+                3: '개인단계'
+            };
+            return stages[stage] || '분석중';
+        }
+
+        function getScoreClass(grade) {
+            const classes = {
+                'A+': 'score-excellent',
+                'A': 'score-good',
+                'B+': 'score-good',
+                'B': 'score-warning',
+                'C': 'score-warning',
+                'D': 'score-danger'
+            };
+            return classes[grade] || 'score-warning';
+        }
+
+        // 상태 모니터링 시작
+        function startStatusMonitoring() {
+            statusCheckInterval = setInterval(checkStatus, 3000); // 3초마다 확인
+        }
+
+        // 상태 모니터링 중지
+        function stopStatusMonitoring() {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+        }
+
+        // 업데이트 스케줄 설정
+        function setUpdateSchedule(schedule) {
+            console.log('업데이트 스케줄 설정:', schedule);
+            // 실제 구현시 서버에 스케줄 설정 전송
+        }
+
+        // 로딩 표시
+        function showLoading(message = '데이터를 분석하고 있습니다...') {
+            document.getElementById('loadingMessage').textContent = message;
+            document.getElementById('loadingState').style.display = 'block';
+        }
+
+        // 로딩 숨김
+        function hideLoading() {
+            document.getElementById('loadingState').style.display = 'none';
+        }
+
+        // 알림 표시
+        function showAlert(message, type = 'info') {
+            const alertElement = document.getElementById('alertMessage');
+            const alertText = document.getElementById('alertText');
+
+            alertText.textContent = message;
+            alertElement.className = `alert alert-${type}`;
+            alertElement.style.display = 'block';
+
+            // 5초 후 자동 숨김
+            setTimeout(hideAlert, 5000);
+        }
+
+        // 알림 숨김
+        function hideAlert() {
+            document.getElementById('alertMessage').style.display = 'none';
+        }
+
+        // 페이지 언로드시 정리
+        window.addEventListener('beforeunload', function() {
+            stopStatusMonitoring();
+        });
+    </script>
+</body>
+</html>

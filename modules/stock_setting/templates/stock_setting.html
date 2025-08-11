@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block page_title %}종목 설정{% endblock %}
+{% block page_description %}관심 종목을 추가하고 관리할 수 있습니다{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('stock_setting.static', filename='css/stock_setting.css') }}">
+
+<!-- 새 종목 추가 영역 -->
+<div class="add-stock-section">
+    <h4>📝 새 종목 추가</h4>
+    <form id="addStockForm">
+        <div class="form-grid">
+            <div class="input-group">
+                <label>종목코드</label>
+                <input type="text" id="add_stock_code" placeholder="005930" required autocomplete="off">
+                <div id="code-suggestions" class="suggestions-dropdown"></div>
+            </div>
+            <div class="input-group">
+                <label>종목명</label>
+                <input type="text" id="add_stock_name" placeholder="자동입력됨" readonly>
+            </div>
+            <div class="input-group">
+                <label>활성화</label>
+                <select id="add_is_active">
+                    <option value="1">활성</option>
+                    <option value="0">비활성</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label>설정가격</label>
+                <input type="number" id="add_setting_price" placeholder="70000" value="0">
+            </div>
+            <div class="input-group">
+                <label>1차매수가</label>
+                <input type="number" id="add_first_buy_price" placeholder="0" value="0">
+            </div>
+            <div class="input-group">
+                <label>매수횟수</label>
+                <input type="number" id="add_buy_count" placeholder="0" value="0">
+            </div>
+            <div class="input-group">
+                <button type="submit" class="btn btn-primary">추가</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- 실행 버튼들 -->
+<div class="action-buttons">
+    <button class="btn btn-info" onclick="refreshStockList()">목록 새로고침</button>
+    <button class="btn btn-danger" onclick="deleteSelected()">선택 삭제</button>
+    <button class="btn btn-success" onclick="saveAllChanges()">전체 저장</button>
+</div>
+
+<!-- 관심 종목 목록 -->
+<div class="stock-list-section">
+    <h4>📋 관심 종목 목록</h4>
+    <div class="list-info">
+        <small>총 <span id="totalCount">0</span>개 종목이 등록되어 있습니다.</small>
+    </div>
+    
+    <div class="table-container">
+        <table class="stock-table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></th>
+                    <th>종목코드</th>
+                    <th>종목명</th>
+                    <th>활성화</th>
+                    <th>설정가격</th>
+                    <th>1차매수가</th>
+                    <th>2차매수가</th>
+                    <th>3차매수가</th>
+                    <th>매수횟수</th>
+                    <th>등록일</th>
+                    <th>수정일</th>
+                    <th>관리</th>
+                </tr>
+            </thead>
+            <tbody id="stockTableBody">
+                <!-- 데이터는 JavaScript로 동적 생성 -->
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 통계 정보 -->
+<div class="statistics-section">
+    <h4>📊 설정 통계</h4>
+    <div class="stats-grid">
+        <div class="stat-item">
+            <div class="stat-value active" id="activeCount">0</div>
+            <div class="stat-label">활성 종목</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value inactive" id="inactiveCount">0</div>
+            <div class="stat-label">비활성 종목</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value count" id="totalBuyCount">0</div>
+            <div class="stat-label">총 매수횟수</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value price" id="avgPrice">0</div>
+            <div class="stat-label">평균 설정가</div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('stock_setting.static', filename='js/stock_setting.js') }}"></script>
+{% endblock %}

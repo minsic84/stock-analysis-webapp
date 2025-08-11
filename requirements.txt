@@ -1,0 +1,9 @@
+Flask==2.3.2
+SQLAlchemy==2.0.19
+PyMySQL==1.1.0
+requests==2.31.0
+beautifulsoup4==4.12.2
+openai==0.27.8
+pandas==2.0.3
+numpy==1.24.3
+python-dotenv==1.0.0
