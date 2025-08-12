@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+네이버 금융 테마 크롤러 (theme_crawler_test.py 기반)
+테마별 상위 종목의 뉴스를 수집하여 DB에 저장
+"""
+
 import requests
 from bs4 import BeautifulSoup
 import time
-import logging
-from typing import List, Dict, Optional
-from datetime import datetime
 import re
+from datetime import datetime, timedelta
+from urllib.parse import urljoin
+import logging
+from typing import List, Dict
 
-from .models import SectorData, StockData
-from common.utils import safe_request, clean_text, parse_number, parse_percentage
+from modules.top_rate_analysis.utils import clean_text, parse_percentage, parse_news_date, parse_news_time
+from .database import TopRateDatabase
 
 
-class NaverFinanceCrawler:
-    """네이버 금융 크롤링 클래스 - 최종 수정 버전"""
-
-    BASE_URL = "https://finance.naver.com"
+class ThemeCrawler:
+    """테마 크롤링 클래스 (theme_crawler_test.py 기반)"""
 
     def __init__(self):
         self.session = requests.Session()
@@ -32,559 +36,324 @@ class NaverFinanceCrawler:
             'Sec-Fetch-Site': 'none',
             'Cache-Control': 'max-age=0'
         })
+        self.db = TopRateDatabase()
 
-    def crawl_top_sectors(self, limit: int = 5) -> List[SectorData]:
-        """상위 업종 크롤링 - 한글 인코딩 문제 해결"""
+    def crawl_and_save_themes(self, target_date: str) -> bool:
+        """테마 크롤링 후 DB 저장 (메인 함수)"""
         try:
-            logging.info(f"업종 크롤링 시작... (limit: {limit})")
+            logging.info(f"🚀 {target_date} 테마 크롤링 시작...")
 
-            url = f"{self.BASE_URL}/sise/sise_group.naver?type=upjong"
+            # 1. 데이터베이스 설정
+            self.db.setup_crawling_database()
+            table_name = self.db.setup_theme_table(target_date)
 
-            response = self._safe_request_with_retry(url)
-            if not response:
-                logging.error("업종 페이지 요청 실패")
-                return self._create_dummy_sectors(limit)
+            # 2. 테마 리스트 크롤링
+            themes = self.get_theme_list()
+            if not themes:
+                logging.error("크롤링할 테마가 없습니다")
+                return False
 
-            # 한글 인코딩 문제 해결
-            response.encoding = 'euc-kr'  # 네이버는 EUC-KR 사용
-            soup = BeautifulSoup(response.text, 'html.parser')  # .content 대신 .text 사용
+            logging.info(f"✅ {len(themes)}개 상승 테마 발견")
 
-            # 업종 테이블 찾기
-            table = soup.find('table', {'class': 'type_1'})
-            if not table:
-                logging.error("업종 테이블을 찾을 수 없습니다")
-                return self._create_dummy_sectors(limit)
-
-            sectors = []
-
-            # tbody가 없으므로 직접 tr 태그들을 찾기
-            rows = table.find_all('tr')
-            logging.info(f"발견된 총 행 수: {len(rows)}")
-
-            # 헤더 행 건너뛰기 (보통 첫 번째 행)
-            data_rows = rows[1:] if len(rows) > 1 else rows
-            logging.info(f"데이터 행 수: {len(data_rows)}")
-
-            processed_count = 0
-            for i, row in enumerate(data_rows):
+            # 3. 테마별 데이터 수집
+            result = {}
+            for i, theme in enumerate(themes):
                 try:
-                    cols = row.find_all('td')
-                    if len(cols) < 4:  # 최소 4개 컬럼 필요
+                    theme_name = theme['name']
+                    theme_code = theme['code']
+                    change_rate = theme['change_rate']
+
+                    logging.info(f"[{i + 1}/{len(themes)}] {theme_name} (+{change_rate}%) 처리 중...")
+
+                    # 테마별 상위 5개 종목 + 전체 종목 정보 수집
+                    top_stocks, all_theme_stocks = self.get_theme_stocks(theme_code, theme_name, limit=5)
+                    if not top_stocks:
+                        logging.warning(f"{theme_name}: 종목을 찾을 수 없음")
                         continue
 
-                    # 업종명 추출
-                    sector_link = cols[0].find('a')
-                    if not sector_link:
-                        continue
+                    logging.info(f"    📰 상위 {len(top_stocks)}개 종목의 뉴스 수집 시작...")
 
-                    sector_name = clean_text(sector_link.text)
-                    if not sector_name or len(sector_name) < 2:
-                        continue
+                    # 상위 5개 종목의 뉴스 수집
+                    stocks_with_news = []
+                    for j, stock in enumerate(top_stocks):
+                        logging.info(f"       [{j + 1}/{len(top_stocks)}] {stock['name']} 뉴스 수집...")
+                        stock_news = self.get_stock_news(stock['code'], stock['name'], limit=5)
 
-                    # 빈 행이나 의미없는 행 건너뛰기
-                    if sector_name in ['', ' ', '&nbsp;'] or sector_name.startswith('&'):
-                        continue
+                        stock_data = stock.copy()
+                        stock_data['news'] = stock_news
+                        stocks_with_news.append(stock_data)
 
-                    sector_url = sector_link.get('href', '')
-                    sector_code = self._extract_sector_code(sector_url)
+                        time.sleep(0.8)  # 종목 간 요청 간격
 
-                    # 현재가, 등락률 등 추출
-                    current_value = parse_number(cols[1].text) if len(cols) > 1 else 0
-                    change_amount = parse_number(cols[2].text) if len(cols) > 2 else 0
-                    change_rate = parse_percentage(cols[3].text) if len(cols) > 3 else 0
-                    volume = parse_number(cols[4].text) if len(cols) > 4 else 0
+                    result[theme_name] = {
+                        'theme_info': {
+                            'code': theme_code,
+                            'change_rate': change_rate
+                        },
+                        'stocks': stocks_with_news,
+                        'theme_stocks': all_theme_stocks
+                    }
 
-                    # 등락률이 0이면 건너뛰기 (의미있는 데이터가 아님)
-                    if change_rate == 0:
-                        continue
+                    total_news = sum(len(stock['news']) for stock in stocks_with_news)
+                    logging.info(f"    ✅ {theme_name} 완료: 상위 {len(stocks_with_news)}개 종목, {total_news}개 뉴스")
 
-                    sector_data = SectorData(
-                        sector_name=sector_name,
-                        sector_code=sector_code,
-                        current_value=current_value or 0,
-                        change_amount=change_amount or 0,
-                        change_rate=change_rate or 0,
-                        volume=volume or 0
-                    )
-
-                    sectors.append(sector_data)
-                    processed_count += 1
-                    logging.info(f"업종 크롤링 완료 ({processed_count}/{limit}): {sector_name} ({change_rate}%)")
-
-                    # 원하는 개수만큼 수집되면 중단
-                    if processed_count >= limit:
-                        break
+                    time.sleep(2)  # 테마 간 요청 간격
 
                 except Exception as e:
-                    logging.error(f"업종 데이터 파싱 오류 (행 {i}): {e}")
+                    logging.error(f"테마 {theme.get('name', 'Unknown')} 처리 실패: {e}")
                     continue
 
-            if not sectors:
-                logging.warning("크롤링된 업종이 없음, 더미 데이터 생성")
-                return self._create_dummy_sectors(limit)
-
-            logging.info(f"업종 크롤링 1단계 완료: {len(sectors)}개 업종")
-
-            # 각 업종별 상위 3개 종목 크롤링
-            for idx, sector in enumerate(sectors):
-                try:
-                    logging.info(f"업종 {sector.sector_name}의 종목 크롤링 시작... ({idx + 1}/{len(sectors)})")
-                    sector.top_stocks = self.crawl_sector_top_stocks(sector.sector_code, limit=3)
-                    logging.info(f"업종 {sector.sector_name}의 종목 크롤링 완료: {len(sector.top_stocks)}개")
-                    time.sleep(1.0)  # 요청 간격을 1초로 늘림
-                except Exception as e:
-                    logging.error(f"업종 {sector.sector_name} 종목 크롤링 실패: {e}")
-                    # 실패시 상승률 상위 종목으로 대체
-                    sector.top_stocks = self._get_sample_stocks(3)
-
-            logging.info(f"전체 업종 크롤링 완료: {len(sectors)}개 업종")
-            return sectors
+            # 4. DB 저장
+            if result:
+                success = self.db.save_theme_data(table_name, result)
+                if success:
+                    logging.info(f"🎯 {target_date} 테마 크롤링 완료!")
+                    self._print_crawling_summary(result)
+                    return True
+                else:
+                    logging.error("DB 저장 실패")
+                    return False
+            else:
+                logging.error("크롤링 결과가 없습니다")
+                return False
 
         except Exception as e:
-            logging.error(f"상위 업종 크롤링 실패: {e}")
-            return self._create_dummy_sectors(limit)
+            logging.error(f"테마 크롤링 실패: {e}")
+            return False
 
-    def crawl_sector_top_stocks(self, sector_code: str, limit: int = 3) -> List[StockData]:
-        """특정 업종의 상위 종목 크롤링 - 한글 인코딩 문제 해결"""
+    def get_theme_list(self) -> List[Dict]:
+        """테마 리스트 크롤링"""
+        url = "https://finance.naver.com/sise/theme.naver"
+
         try:
-            if not sector_code:
-                logging.warning("업종 코드가 비어있음, 샘플 종목 반환")
-                return self._get_sample_stocks(limit)
-
-            url = f"{self.BASE_URL}/sise/sise_group_detail.naver?type=upjong&no={sector_code}"
-            logging.info(f"종목 크롤링 URL: {url}")
-
-            response = self._safe_request_with_retry(url)
-            if not response:
-                logging.warning(f"업종 {sector_code} 페이지 요청 실패")
-                return self._get_sample_stocks(limit)
-
-            # 한글 인코딩 문제 해결
+            response = requests.get(url, headers=self.session.headers, timeout=10)
             response.encoding = 'euc-kr'
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # 종목 테이블 찾기
             table = soup.find('table', {'class': 'type_1'})
             if not table:
-                logging.warning(f"업종 {sector_code} 테이블을 찾을 수 없음")
-                return self._get_sample_stocks(limit)
+                return []
 
-            stocks = []
+            themes = []
+            rows = table.find_all('tr')[1:]  # 헤더 제외
 
-            # tbody가 없으므로 직접 tr 태그들을 찾기
-            rows = table.find_all('tr')
-            data_rows = rows[1:] if len(rows) > 1 else rows  # 헤더 제외
-            logging.info(f"업종 {sector_code} 발견된 종목 행 수: {len(data_rows)}")
-
-            processed_count = 0
-            for i, row in enumerate(data_rows):
+            for row in rows:
                 try:
                     cols = row.find_all('td')
-                    if len(cols) < 6:
+                    if len(cols) < 4:
                         continue
 
-                    # 종목명과 코드 추출
-                    stock_link = cols[1].find('a')
-                    if not stock_link:
+                    theme_link = cols[0].find('a')
+                    if not theme_link:
                         continue
 
-                    stock_name = clean_text(stock_link.text)
+                    theme_name = clean_text(theme_link.text)
+                    theme_url = theme_link.get('href', '')
+                    theme_code_match = re.search(r'no=(\d+)', theme_url)
+                    theme_code = theme_code_match.group(1) if theme_code_match else ""
+                    change_rate = parse_percentage(cols[3].text)
+
+                    if theme_name and theme_code and change_rate > 0:
+                        themes.append({
+                            'name': theme_name,
+                            'code': theme_code,
+                            'change_rate': change_rate,
+                            'url': f"https://finance.naver.com{theme_url}"
+                        })
+                except Exception as e:
+                    logging.error(f"테마 파싱 오류: {e}")
+                    continue
+
+            return themes
+
+        except Exception as e:
+            logging.error(f"테마 리스트 크롤링 실패: {e}")
+            return []
+
+    def get_theme_stocks(self, theme_code: str, theme_name: str, limit: int = 5) -> tuple:
+        """특정 테마의 상위 종목 크롤링 + 테마 내 모든 종목 정보"""
+        url = f"https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={theme_code}"
+
+        try:
+            response = requests.get(url, headers=self.session.headers, timeout=15)
+            response.encoding = 'euc-kr'
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            stock_links = soup.find_all('a', href=re.compile(r'/item/main\.naver\?code=\d{6}'))
+            if not stock_links:
+                return [], []
+
+            # 모든 종목 정보 수집
+            all_theme_stocks = []
+            top_stocks = []
+            processed_codes = set()
+
+            for link in stock_links:
+                try:
+                    href = link.get('href', '')
+                    code_match = re.search(r'code=(\d{6})', href)
+                    if not code_match:
+                        continue
+
+                    stock_code = code_match.group(1)
+                    if stock_code in processed_codes:
+                        continue
+                    processed_codes.add(stock_code)
+
+                    stock_name = clean_text(link.text)
                     if not stock_name or len(stock_name) < 2:
                         continue
 
-                    stock_url = stock_link.get('href', '')
-                    stock_code = self._extract_stock_code(stock_url)
-
-                    if not stock_code:
-                        continue
-
-                    # 가격 정보 추출
-                    current_price = parse_number(cols[2].text) if len(cols) > 2 else 0
-                    change_amount = parse_number(cols[3].text) if len(cols) > 3 else 0
-                    change_rate = parse_percentage(cols[4].text) if len(cols) > 4 else 0
-                    volume = parse_number(cols[5].text) if len(cols) > 5 else 0
-                    trading_value = parse_number(cols[6].text) if len(cols) > 6 else 0
-
-                    stock_data = StockData(
-                        stock_code=stock_code,
-                        stock_name=stock_name,
-                        current_price=current_price or 0,
-                        change_amount=change_amount or 0,
-                        change_rate=change_rate or 0,
-                        volume=volume or 0,
-                        trading_value=trading_value or 0
-                    )
-
-                    stocks.append(stock_data)
-                    processed_count += 1
-                    logging.info(f"종목 크롤링 완료 ({processed_count}/{limit}): {stock_name} ({stock_code})")
-
-                    # 원하는 개수만큼 수집되면 중단
-                    if processed_count >= limit:
-                        break
-
-                except Exception as e:
-                    logging.error(f"종목 데이터 파싱 오류 (행 {i}): {e}")
-                    continue
-
-            if not stocks:
-                logging.warning(f"업종 {sector_code}에서 크롤링된 종목이 없음, 샘플 종목 반환")
-                return self._get_sample_stocks(limit)
-
-            logging.info(f"업종 {sector_code} 종목 크롤링 완료: {len(stocks)}개")
-            return stocks
-
-        except Exception as e:
-            logging.error(f"업종 종목 크롤링 실패: {e}")
-            return self._get_sample_stocks(limit)
-
-    def crawl_all_sector_stocks(self, sector_code: str) -> List[StockData]:
-        """특정 업종의 모든 종목 크롤링 (신고가 분석용)"""
-        try:
-            all_stocks = []
-            page = 1
-
-            while True:
-                url = f"{self.BASE_URL}/sise/sise_group_detail.naver?type=upjong&no={sector_code}&page={page}"
-
-                response = self._safe_request_with_retry(url)
-                if not response:
-                    break
-
-                # 한글 인코딩 문제 해결
-                response.encoding = 'euc-kr'
-                soup = BeautifulSoup(response.text, 'html.parser')
-
-                table = soup.find('table', {'class': 'type_1'})
-                if not table:
-                    break
-
-                # tbody가 없으므로 직접 tr 태그들을 찾기
-                rows = table.find_all('tr')
-                data_rows = rows[1:] if len(rows) > 1 else rows  # 헤더 제외
-
-                if not data_rows:
-                    break
-
-                page_stocks = []
-                for row in data_rows:
-                    try:
-                        cols = row.find_all('td')
-                        if len(cols) < 6:
-                            continue
-
-                        stock_link = cols[1].find('a')
-                        if not stock_link:
-                            continue
-
-                        stock_name = clean_text(stock_link.text)
-                        if not stock_name:
-                            continue
-
-                        stock_url = stock_link.get('href', '')
-                        stock_code = self._extract_stock_code(stock_url)
-
-                        if not stock_code:
-                            continue
-
-                        current_price = parse_number(cols[2].text) if len(cols) > 2 else 0
-                        change_rate = parse_percentage(cols[4].text) if len(cols) > 4 else 0
-                        volume = parse_number(cols[5].text) if len(cols) > 5 else 0
-
-                        stock_data = StockData(
-                            stock_code=stock_code,
-                            stock_name=stock_name,
-                            current_price=current_price or 0,
-                            change_rate=change_rate or 0,
-                            volume=volume or 0
-                        )
-
-                        page_stocks.append(stock_data)
-
-                    except Exception as e:
-                        logging.error(f"종목 파싱 오류: {e}")
-                        continue
-
-                if not page_stocks:
-                    break
-
-                all_stocks.extend(page_stocks)
-                page += 1
-                time.sleep(0.5)  # 페이지 간 요청 간격
-
-                # 최대 3페이지까지만 크롤링 (시간 단축)
-                if page > 3:
-                    break
-
-            logging.info(f"업종 전체 종목 크롤링 완료: {len(all_stocks)}개")
-            return all_stocks
-
-        except Exception as e:
-            logging.error(f"업종 전체 종목 크롤링 실패: {e}")
-            # 실패시 상승률 상위 종목으로 대체
-            return self.crawl_rising_stocks(limit=20)
-
-    def _safe_request_with_retry(self, url: str, max_retries: int = 3) -> Optional[requests.Response]:
-        """재시도 로직이 포함된 안전한 요청"""
-        for attempt in range(max_retries):
-            try:
-                logging.info(f"요청 시도 {attempt + 1}/{max_retries}: {url}")
-
-                response = self.session.get(url, timeout=15)
-                response.raise_for_status()
-
-                logging.info(f"응답 성공: 상태코드 {response.status_code}, 내용 길이 {len(response.content)}")
-                return response
-
-            except requests.exceptions.RequestException as e:
-                logging.error(f"요청 실패 (시도 {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)  # 지수 백오프
-                continue
-
-        return None
-
-    def _create_dummy_sectors(self, limit: int) -> List[SectorData]:
-        """더미 업종 데이터 생성"""
-        try:
-            # 상승률 상위 종목으로 가상 업종 생성
-            rising_stocks = self.crawl_rising_stocks(limit=limit * 3)
-
-            if not rising_stocks:
-                # 상승률 크롤링도 실패하면 하드코딩된 샘플 사용
-                return self._create_hardcoded_sectors(limit)
-
-            sectors = []
-            for i in range(limit):
-                start_idx = i * 3
-                end_idx = start_idx + 3
-                group_stocks = rising_stocks[start_idx:end_idx]
-
-                if group_stocks:
-                    avg_change_rate = sum(stock.change_rate for stock in group_stocks) / len(group_stocks)
-                else:
-                    avg_change_rate = 5.0 + i * 2  # 기본값
-                    group_stocks = self._get_sample_stocks(3)
-
-                sector = SectorData(
-                    sector_name=f"상위그룹 {i + 1}",
-                    sector_code=f"TEMP{i + 1:02d}",
-                    change_rate=avg_change_rate,
-                    current_value=100.0 + avg_change_rate,
-                    volume=sum(stock.volume for stock in group_stocks) if group_stocks else 1000000
-                )
-
-                sector.top_stocks = group_stocks
-                sectors.append(sector)
-
-            return sectors
-
-        except Exception as e:
-            logging.error(f"더미 업종 생성 실패: {e}")
-            return self._create_hardcoded_sectors(limit)
-
-    def _create_hardcoded_sectors(self, limit: int) -> List[SectorData]:
-        """하드코딩된 샘플 업종 생성"""
-        sample_sectors = [
-            ("반도체", "001", 15.5),
-            ("전기전자", "002", 12.3),
-            ("바이오", "003", 18.7),
-            ("자동차", "004", 8.9),
-            ("화학", "005", 11.2),
-        ]
-
-        sectors = []
-        for i in range(min(limit, len(sample_sectors))):
-            name, code, rate = sample_sectors[i]
-            sector = SectorData(
-                sector_name=name,
-                sector_code=code,
-                change_rate=rate,
-                current_value=100.0 + rate,
-                volume=1000000 + i * 100000
-            )
-            sector.top_stocks = self._get_sample_stocks(3)
-            sectors.append(sector)
-
-        return sectors
-
-    def _get_sample_stocks(self, count: int) -> List[StockData]:
-        """샘플 종목 데이터 생성"""
-        sample_stocks = [
-            ("005930", "삼성전자", 50000, 2.5),
-            ("000660", "SK하이닉스", 85000, 3.2),
-            ("207940", "삼성바이오로직스", 750000, 1.8),
-            ("005380", "현대차", 180000, 4.1),
-            ("006400", "삼성SDI", 420000, 2.9),
-            ("035420", "NAVER", 120000, 3.7),
-            ("051910", "LG화학", 320000, 2.1),
-            ("028260", "삼성물산", 95000, 1.6),
-            ("012330", "현대모비스", 240000, 4.3),
-            ("096770", "SK이노베이션", 140000, 3.5),
-        ]
-
-        stocks = []
-        for i in range(min(count, len(sample_stocks))):
-            code, name, price, rate = sample_stocks[i]
-            stocks.append(StockData(
-                stock_code=code,
-                stock_name=name,
-                current_price=price,
-                change_rate=rate,
-                volume=1000000 + i * 100000
-            ))
-
-        return stocks
-
-    def crawl_rising_stocks(self, limit: int = 50) -> List[StockData]:
-        """상승률 상위 종목 크롤링 - 한글 인코딩 문제 해결"""
-        try:
-            url = f"{self.BASE_URL}/sise/sise_rise.naver"
-
-            response = safe_request(url, headers=self.session.headers)
-            if not response:
-                logging.error("상승률 페이지 요청 실패")
-                return []
-
-            # 한글 인코딩 문제 해결
-            response.encoding = 'euc-kr'
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            table = soup.find('table', {'class': 'type_2'})
-            if not table:
-                table = soup.find('table', {'summary': '거래량상위'})
-                if not table:
-                    logging.error("상승률 테이블을 찾을 수 없습니다")
-                    return []
-
-            stocks = []
-            rows = table.find('tbody').find_all('tr') if table.find('tbody') else table.find_all('tr')
-
-            logging.info(f"발견된 행 수: {len(rows)}")
-
-            for i, row in enumerate(rows[:limit]):
-                try:
-                    cols = row.find_all('td')
-                    if len(cols) < 6:
-                        continue
-
-                    stock_link = None
-                    stock_name = ""
-
-                    for col in cols:
-                        link = col.find('a')
-                        if link and 'item/main.naver' in link.get('href', ''):
-                            stock_link = link
-                            stock_name = clean_text(link.text)
-                            break
-
-                    if not stock_link or not stock_name:
-                        continue
-
-                    stock_url = stock_link.get('href', '')
-                    stock_code = self._extract_stock_code(stock_url)
-
-                    if not stock_code:
-                        continue
-
+                    row = link.find_parent('tr')
                     current_price = 0
                     change_rate = 0
                     volume = 0
 
-                    for col in cols:
-                        text = clean_text(col.text)
-                        if text and text.replace(',', '').replace('+', '').replace('-', '').replace('%', '').replace(
-                                '.', '').isdigit():
-                            if '%' in text:
-                                change_rate = parse_percentage(text) or 0
-                            elif ',' in text and len(text) > 3:
+                    if row:
+                        cells = row.find_all('td')
+                        for cell in cells:
+                            cell_text = clean_text(cell.text)
+
+                            if cell_text.isdigit() and int(cell_text) >= 1000:
                                 if current_price == 0:
-                                    current_price = parse_number(text) or 0
-                                elif volume == 0:
-                                    volume = parse_number(text) or 0
+                                    current_price = int(cell_text)
 
-                    stock_data = StockData(
-                        stock_code=stock_code,
-                        stock_name=stock_name,
-                        current_price=current_price,
-                        change_rate=change_rate,
-                        volume=volume
-                    )
+                            if '%' in cell_text:
+                                rate = parse_percentage(cell_text)
+                                if abs(rate) < 100:
+                                    change_rate = rate
 
-                    stocks.append(stock_data)
-                    logging.info(f"종목 파싱 성공: {stock_name} ({stock_code}) - {change_rate}%")
+                            if cell_text.isdigit() and int(cell_text) > 10000:
+                                if volume == 0 or int(cell_text) > volume:
+                                    volume = int(cell_text)
+
+                    # 모든 종목 정보
+                    theme_stock_info = {
+                        'code': stock_code,
+                        'name': stock_name,
+                        'price': current_price,
+                        'change_rate': change_rate,
+                        'volume': volume
+                    }
+                    all_theme_stocks.append(theme_stock_info)
+
+                    # 상위 종목들만 따로 저장
+                    if len(top_stocks) < limit:
+                        top_stocks.append({
+                            'code': stock_code,
+                            'name': stock_name,
+                            'price': current_price,
+                            'change_rate': change_rate,
+                            'volume': volume
+                        })
 
                 except Exception as e:
-                    logging.error(f"상승률 종목 파싱 오류 (행 {i}): {e}")
+                    logging.error(f"종목 파싱 오류: {e}")
                     continue
 
-            logging.info(f"상승률 상위 종목 크롤링 완료: {len(stocks)}개")
-            return stocks
+            logging.info(f"    ✅ {theme_name}: 상위 {len(top_stocks)}개 종목, 전체 {len(all_theme_stocks)}개 종목 정보 수집")
+            return top_stocks, all_theme_stocks
 
         except Exception as e:
-            logging.error(f"상승률 상위 종목 크롤링 실패: {e}")
-            return []
+            logging.error(f"테마 종목 크롤링 실패 ({theme_name}): {e}")
+            return [], []
 
-    def get_stock_basic_info(self, stock_code: str) -> Optional[Dict]:
-        """종목 기본 정보 조회"""
+    def get_stock_news(self, stock_code: str, stock_name: str, limit: int = 5) -> List[Dict]:
+        """특정 종목의 뉴스 크롤링"""
+        url = f"https://finance.naver.com/item/news_news.naver?code={stock_code}&page=1&sm=title_entity_id.basic&clusterId="
+
         try:
-            url = f"{self.BASE_URL}/item/main.naver?code={stock_code}"
-
-            response = self._safe_request_with_retry(url)
-            if not response:
-                return None
-
-            # 한글 인코딩 문제 해결
+            response = requests.get(url, headers=self.session.headers, timeout=10)
             response.encoding = 'euc-kr'
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # 종목명
-            stock_name_elem = soup.find('div', {'class': 'wrap_company'})
-            stock_name = ""
-            if stock_name_elem:
-                name_elem = stock_name_elem.find('h2')
-                if name_elem:
-                    stock_name = clean_text(name_elem.text)
+            news_table = soup.find('table', {'class': 'type5'})
+            if not news_table:
+                return []
 
-            # 현재가 정보
-            price_elem = soup.find('p', {'class': 'no_today'})
-            current_price = 0
-            if price_elem:
-                price_span = price_elem.find('span', {'class': 'blind'})
-                if price_span:
-                    current_price = parse_number(price_span.text) or 0
+            news_list = []
+            rows = news_table.find_all('tr')
 
-            # 등락률 정보
-            change_elem = soup.find('p', {'class': 'no_exday'})
-            change_rate = 0
-            if change_elem:
-                rate_span = change_elem.find('span', {'class': 'blind'})
-                if rate_span:
-                    change_rate = parse_percentage(rate_span.text) or 0
+            current_date = None
+            today = datetime.now().date()
+            yesterday = today - timedelta(days=1)
 
-            return {
-                'stock_code': stock_code,
-                'stock_name': stock_name,
-                'current_price': current_price,
-                'change_rate': change_rate
-            }
+            for row in rows:
+                try:
+                    # 날짜 행 확인
+                    date_cell = row.find('td', {'class': 'date'})
+                    if date_cell and date_cell.get('colspan'):
+                        date_text = clean_text(date_cell.text)
+                        current_date = parse_news_date(date_text)
+                        continue
+
+                    # 뉴스 제목 행
+                    title_cell = row.find('td', {'class': 'title'})
+                    if not title_cell:
+                        continue
+
+                    news_link = title_cell.find('a')
+                    if not news_link:
+                        continue
+
+                    title = clean_text(news_link.text)
+                    if not title:
+                        continue
+
+                    news_url = news_link.get('href', '')
+                    if news_url and not news_url.startswith('http'):
+                        news_url = urljoin('https://finance.naver.com', news_url)
+
+                    # 뉴스 출처
+                    source_cell = row.find('td', {'class': 'info'})
+                    source = clean_text(source_cell.text) if source_cell else ""
+
+                    # 시간 정보
+                    time_cell = row.find('td', {'class': 'date'})
+                    news_time = current_date
+                    if time_cell and not time_cell.get('colspan'):
+                        time_text = clean_text(time_cell.text)
+                        news_time = parse_news_time(time_text, current_date)
+
+                    # 당일 또는 어제 뉴스만
+                    if news_time and (news_time.date() == today or news_time.date() == yesterday):
+                        news_data = {
+                            'title': title,
+                            'url': news_url,
+                            'source': source,
+                            'time': news_time.strftime('%Y-%m-%d %H:%M') if news_time else '',
+                            'is_today': news_time.date() == today if news_time else False
+                        }
+
+                        news_list.append(news_data)
+
+                        if len(news_list) >= limit:
+                            break
+
+                except Exception as e:
+                    logging.error(f"뉴스 파싱 오류: {e}")
+                    continue
+
+            return news_list
 
         except Exception as e:
-            logging.error(f"종목 기본 정보 조회 실패 ({stock_code}): {e}")
-            return None
+            logging.error(f"종목 뉴스 크롤링 실패 ({stock_name}): {e}")
+            return []
 
-    def _extract_sector_code(self, url: str) -> str:
-        """URL에서 업종 코드 추출"""
-        if not url:
-            return ""
+    def _print_crawling_summary(self, result: Dict):
+        """크롤링 결과 요약 출력"""
+        total_themes = len(result)
+        total_stocks = sum(len(data['stocks']) for data in result.values())
+        total_news = sum(len(stock['news']) for data in result.values() for stock in data['stocks'])
 
-        match = re.search(r'no=(\d+)', url)
-        return match.group(1) if match else ""
+        logging.info(f"\n🎯 크롤링 최종 결과:")
+        logging.info(f"   📊 테마: {total_themes}개")
+        logging.info(f"   📈 총 종목: {total_stocks}개")
+        logging.info(f"   📰 총 뉴스: {total_news}개")
+        logging.info(f"   ⚡ 평균 종목당 뉴스: {total_news / total_stocks:.1f}개" if total_stocks > 0 else "")
 
-    def _extract_stock_code(self, url: str) -> str:
-        """URL에서 종목 코드 추출"""
-        if not url:
-            return ""
-
-        match = re.search(r'code=(\d{6})', url)
-        return match.group(1) if match else ""
+        logging.info(f"\n📊 테마별 상세:")
+        for theme_name, data in result.items():
+            stock_count = len(data['stocks'])
+            news_count = sum(len(stock['news']) for stock in data['stocks'])
+            logging.info(f"   {theme_name}: {stock_count}개 종목, {news_count}개 뉴스")

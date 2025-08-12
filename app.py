@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
-from config import Config, get_config
-from common.database import init_db
+from flask import Flask, render_template, send_from_directory
+from config import get_config
 import os
 import logging
 
@@ -17,13 +16,10 @@ def create_app():
     app.config.from_object(config_class)
 
     # 로깅 설정
-    logging.basicConfig(level=logging.INFO)
-
-    # 데이터베이스 초기화 (오류가 있어도 계속 진행)
-    try:
-        init_db(app)
-    except Exception as e:
-        app.logger.warning(f"데이터베이스 초기화 실패 (개발 모드에서 계속 진행): {e}")
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 
     # 블루프린트 등록
     register_blueprints(app)
@@ -51,7 +47,6 @@ def create_app():
         try:
             return render_template('404.html'), 404
         except Exception:
-            # 템플릿 로드 실패시 기본 응답
             return '''
             <h1>404 - 페이지를 찾을 수 없습니다</h1>
             <p><a href="/">홈으로 돌아가기</a></p>
@@ -63,7 +58,6 @@ def create_app():
         try:
             return render_template('500.html'), 500
         except Exception:
-            # 템플릿 로드 실패시 기본 응답
             return '''
             <h1>500 - 서버 오류</h1>
             <p>서버에서 오류가 발생했습니다.</p>
@@ -75,18 +69,19 @@ def create_app():
 
 def register_blueprints(app):
     """블루프린트 등록"""
+
+    # 등락율상위분석 모듈 (독립형)
     try:
-        # 등락율상위분석 모듈
-        from modules.top_rate_analysis.routes import top_rate_bp
-        app.register_blueprint(top_rate_bp, url_prefix='/top-rate')
-        app.logger.info("등락율상위분석 모듈 등록 완료")
+        from modules.top_rate_analysis import register_module
+        register_module(app)
+        app.logger.info("✅ 등락율상위분석 모듈 등록 완료")
     except Exception as e:
-        app.logger.error(f"등락율상위분석 모듈 등록 실패: {e}")
+        app.logger.error(f"❌ 등락율상위분석 모듈 등록 실패: {e}")
 
     # 추후 다른 모듈들 추가 가능
     # try:
-    #     from modules.stock_setting.routes import stock_setting_bp
-    #     app.register_blueprint(stock_setting_bp, url_prefix='/stock-setting')
+    #     from modules.stock_setting import register_module as register_stock_setting
+    #     register_stock_setting(app)
     # except Exception as e:
     #     app.logger.error(f"종목설정 모듈 등록 실패: {e}")
 
@@ -99,6 +94,10 @@ if __name__ == '__main__':
     if not os.path.exists(static_dir):
         os.makedirs(static_dir)
         app.logger.info(f"static 디렉토리 생성: {static_dir}")
+
+    print("🚀 Flask 주식분석 웹앱 시작!")
+    print("📊 등락율상위분석 모듈: /top-rate")
+    print("🌐 메인 페이지: http://localhost:5000")
 
     app.run(
         debug=app.config['DEBUG'],

@@ -1,371 +1,309 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+AI 분석기 - OpenAI GPT를 활용한 뉴스 분석
+개별 이슈 vs 테마 이슈 구분
+"""
+
 import openai
 import json
 import logging
 from typing import List, Dict, Optional
-from datetime import datetime
 import os
 
-from .models import NewsData, StockData, SectorData, AIAnalysisResult, SupplyDemandData
-from common.utils import clean_text
+from .database import TopRateDatabase
 
 
 class AIAnalyzer:
-    """OpenAI GPT를 이용한 AI 분석 클래스"""
+    """AI 뉴스 분석 클래스"""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """AI 분석기 초기화"""
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+    def __init__(self):
+        self.api_key = os.getenv('OPENAI_API_KEY')
         if not self.api_key:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다")
 
         openai.api_key = self.api_key
+        self.db = TopRateDatabase()
 
-        # 분석 프롬프트 템플릿
-        self.analysis_prompt_template = self._load_analysis_prompt()
-
-    def analyze_stock_news(self, sectors: List[SectorData], news_dict: Dict[str, List[NewsData]]) -> AIAnalysisResult:
-        """종목 뉴스 종합 분석"""
+    def analyze_and_save(self, analysis_date: str, theme_data: List[Dict]) -> bool:
+        """테마 데이터를 AI 분석 후 DB 저장"""
         try:
-            # 분석용 데이터 준비
-            analysis_data = self._prepare_analysis_data(sectors, news_dict)
+            logging.info(f"🤖 {analysis_date} AI 분석 시작...")
 
-            # GPT 프롬프트 생성
-            prompt = self._create_analysis_prompt(analysis_data)
+            # AI 분석 테이블 설정 (덮어쓰기)
+            ai_table = self.db.setup_ai_analysis_table(analysis_date)
 
-            # OpenAI GPT 호출
+            # 종목별 AI 분석 실행
+            analysis_results = []
+            total_stocks = len(theme_data)
+
+            for i, stock_data in enumerate(theme_data):
+                try:
+                    logging.info(f"[{i + 1}/{total_stocks}] {stock_data['stock_name']} AI 분석 중...")
+
+                    # 개별 종목 AI 분석
+                    analysis_result = self._analyze_single_stock(stock_data)
+                    if analysis_result:
+                        analysis_results.append(analysis_result)
+                        logging.info(
+                            f"    ✅ {stock_data['stock_name']}: {analysis_result['issue_type']} 이슈, {analysis_result['ai_score']}점")
+                    else:
+                        logging.warning(f"    ❌ {stock_data['stock_name']}: 분석 실패")
+
+                except Exception as e:
+                    logging.error(f"종목 분석 실패 ({stock_data.get('stock_name', 'Unknown')}): {e}")
+                    continue
+
+            # DB 저장
+            if analysis_results:
+                success = self.db.save_ai_analysis(ai_table, analysis_results)
+                if success:
+                    logging.info(f"🎯 AI 분석 완료: {len(analysis_results)}/{total_stocks}개 종목")
+                    self._print_analysis_summary(analysis_results)
+                    return True
+                else:
+                    logging.error("AI 분석 결과 저장 실패")
+                    return False
+            else:
+                logging.error("AI 분석 결과가 없습니다")
+                return False
+
+        except Exception as e:
+            logging.error(f"AI 분석 실패: {e}")
+            return False
+
+    def _analyze_single_stock(self, stock_data: Dict) -> Optional[Dict]:
+        """개별 종목 AI 분석"""
+        try:
+            # 뉴스 데이터 파싱
+            import json as json_lib
+            news_list = json_lib.loads(stock_data['news']) if isinstance(stock_data['news'], str) else stock_data[
+                'news']
+            themes = json_lib.loads(stock_data['themes']) if isinstance(stock_data['themes'], str) else stock_data[
+                'themes']
+
+            if not news_list:
+                return None
+
+            # 뉴스 제목들 합치기
+            news_titles = [news['title'] for news in news_list if news.get('title')]
+            if not news_titles:
+                return None
+
+            # GPT 분석 요청
+            gpt_result = self._call_gpt_analysis(
+                stock_name=stock_data['stock_name'],
+                themes=themes,
+                news_titles=news_titles,
+                change_rate=stock_data['change_rate']
+            )
+
+            if not gpt_result:
+                return None
+
+            # 결과 구조화
+            analysis_result = {
+                'stock_code': stock_data['stock_code'],
+                'stock_name': stock_data['stock_name'],
+                'primary_theme': themes[0] if themes else '기타',
+                'issue_type': gpt_result.get('issue_type', 'INDIVIDUAL'),
+                'issue_category': gpt_result.get('issue_category', ''),
+                'ai_score': gpt_result.get('ai_score', 50),
+                'confidence_level': gpt_result.get('confidence_level', 0.5),
+                'key_factors': gpt_result.get('key_factors', []),
+                'news_summary': gpt_result.get('news_summary', ''),
+                'ai_reasoning': gpt_result.get('ai_reasoning', ''),
+                'investment_opinion': gpt_result.get('investment_opinion', '관망')
+            }
+
+            return analysis_result
+
+        except Exception as e:
+            logging.error(f"개별 종목 분석 실패: {e}")
+            return None
+
+    def _call_gpt_analysis(self, stock_name: str, themes: List[str], news_titles: List[str], change_rate: float) -> \
+    Optional[Dict]:
+        """GPT API 호출"""
+        try:
+            # 뉴스 제목들을 문자열로 합치기
+            news_text = "\n".join([f"- {title}" for title in news_titles])
+            themes_text = ", ".join(themes)
+
+            prompt = f"""
+다음 종목의 뉴스를 분석하여 투자 관점에서 평가해주세요.
+
+**종목명**: {stock_name}
+**소속 테마**: {themes_text}
+**등락률**: {change_rate:+.2f}%
+
+**당일 뉴스**:
+{news_text}
+
+다음 기준으로 분석해주세요:
+
+1. **이슈 타입 판단**:
+   - THEME: 해당 테마 전체에 영향을 주는 이슈 (예: AI반도체 전반의 호황, 바이오 섹터의 FDA 승인 러시)
+   - INDIVIDUAL: 해당 기업만의 고유한 이슈 (예: 특정 회사의 실적 발표, 계약 체결, 신제품 출시)
+
+2. **중요도 점수**: 1-100점 (높을수록 투자 관심도 높음)
+
+3. **핵심 재료**: 주요 키워드들 (최대 5개)
+
+4. **투자 의견**: 강력매수, 매수, 보유, 관망, 매도 중 선택
+
+JSON 형태로 응답해주세요:
+{{
+    "issue_type": "THEME" or "INDIVIDUAL",
+    "issue_category": "구체적 카테고리 (예: FDA승인, 실적발표, 계약체결)",
+    "ai_score": 숫자 (1-100),
+    "confidence_level": 숫자 (0.0-1.0),
+    "key_factors": ["키워드1", "키워드2", ...],
+    "news_summary": "뉴스 요약 (2-3문장)",
+    "ai_reasoning": "판단 근거 설명",
+    "investment_opinion": "투자의견"
+}}
+"""
+
             response = openai.ChatCompletion.create(
-                model="gpt-4",  # 또는 "gpt-3.5-turbo"
+                model="gpt-4",
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 한국 주식시장 전문 애널리스트입니다. 당일 뉴스와 재료를 바탕으로 투자 분석을 수행합니다."
+                        "content": "당신은 한국 주식시장 전문 애널리스트입니다. 뉴스를 분석하여 테마 이슈와 개별 이슈를 정확히 구분하고, 투자 관점에서 평가합니다."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                max_tokens=2000,
-                temperature=0.3,
-                presence_penalty=0.1,
-                frequency_penalty=0.1
+                max_tokens=1000,
+                temperature=0.3
             )
 
             # 응답 파싱
-            analysis_text = response.choices[0].message.content
-            analysis_result = self._parse_gpt_response(analysis_text)
+            response_text = response.choices[0].message.content.strip()
 
-            logging.info("AI 분석 완료")
-            return analysis_result
-
-        except Exception as e:
-            logging.error(f"AI 분석 실패: {e}")
-            return self._create_fallback_analysis()
-
-    def analyze_supply_demand(self, supply_data: List[SupplyDemandData]) -> str:
-        """수급 데이터 AI 분석"""
-        try:
-            # 수급 데이터 요약
-            supply_summary = self._summarize_supply_data(supply_data)
-
-            prompt = f"""
-다음 수급 데이터를 분석하여 투자 관점에서 해석해주세요:
-
-{supply_summary}
-
-분석 요점:
-1. 외국인의 선제적 움직임 (예지 능력)
-2. 기관 (사모펀드, 투신) 동참 여부
-3. 개인 투자자의 연착매수 위험성
-4. 신용잔고 과열 여부
-5. 수급 단계 (기반→투신→개인) 진단
-
-200자 이내로 핵심만 요약해주세요.
-"""
-
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 주식 수급 분석 전문가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=300,
-                temperature=0.2
-            )
-
-            return response.choices[0].message.content.strip()
-
-        except Exception as e:
-            logging.error(f"수급 AI 분석 실패: {e}")
-            return "수급 분석을 수행할 수 없습니다."
-
-    def _prepare_analysis_data(self, sectors: List[SectorData], news_dict: Dict[str, List[NewsData]]) -> Dict:
-        """분석용 데이터 준비"""
-        analysis_data = {
-            "sectors": [],
-            "total_news": 0,
-            "key_keywords": [],
-            "today_materials": []
-        }
-
-        all_keywords = []
-
-        for sector in sectors:
-            sector_info = {
-                "name": sector.sector_name,
-                "change_rate": sector.change_rate,
-                "stocks": []
-            }
-
-            for stock in sector.top_stocks:
-                stock_news = news_dict.get(stock.stock_code, [])
-
-                stock_info = {
-                    "name": stock.stock_name,
-                    "code": stock.stock_code,
-                    "change_rate": stock.change_rate,
-                    "news_count": len(stock_news),
-                    "news_titles": [news.title for news in stock_news if news.is_today],
-                    "keywords": []
-                }
-
-                # 뉴스 키워드 수집
-                for news in stock_news:
-                    if news.is_today:  # 당일 뉴스만
-                        stock_info["keywords"].extend(news.keywords)
-                        all_keywords.extend(news.keywords)
-                        analysis_data["today_materials"].append({
-                            "stock": stock.stock_name,
-                            "title": news.title,
-                            "time": news.time_display,
-                            "keywords": news.keywords
-                        })
-
-                sector_info["stocks"].append(stock_info)
-                analysis_data["total_news"] += len([n for n in stock_news if n.is_today])
-
-            analysis_data["sectors"].append(sector_info)
-
-        # 주요 키워드 빈도 계산
-        keyword_counts = {}
-        for keyword in all_keywords:
-            keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
-
-        # 상위 키워드 추출
-        analysis_data["key_keywords"] = sorted(
-            keyword_counts.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:10]
-
-        return analysis_data
-
-    def _create_analysis_prompt(self, data: Dict) -> str:
-        """GPT 분석 프롬프트 생성"""
-        prompt = f"""
-오늘({datetime.now().strftime('%Y-%m-%d')}) 주식시장 등락율 상위 분석을 수행합니다.
-
-## 📊 상위 업종 현황
-"""
-
-        for sector in data["sectors"]:
-            prompt += f"\n**{sector['name']}** ({sector['change_rate']:+.2f}%)\n"
-            for stock in sector["stocks"]:
-                if stock["news_count"] > 0:
-                    prompt += f"- {stock['name']}: {stock['change_rate']:+.2f}%, 당일뉴스 {stock['news_count']}건\n"
-
-        prompt += f"\n## 📰 주요 당일 재료 ({len(data['today_materials'])}건)\n"
-
-        for material in data["today_materials"][:10]:  # 상위 10개만
-            prompt += f"- **{material['stock']}**: {material['title']} ({material['time']})\n"
-
-        prompt += f"\n## 🔑 키워드 빈도\n"
-        for keyword, count in data["key_keywords"][:5]:
-            prompt += f"- {keyword}: {count}회\n"
-
-        prompt += f"""
-
-## 🎯 분석 요청사항
-
-다음 관점에서 종합 분석해주세요:
-
-### 1. 핵심 투자 포인트 (당일 재료 중심)
-- 새로운 혁신 재료 (시대개막, AI혁신 등)
-- 글로벌 대기업 이슈 (투자, CEO발언, 협업)
-- 대박 실적 (100%+ 증가, 글로벌 진출)
-- 세계최초/FDA승인/조단위 이슈
-- 복합 시너지 효과
-
-### 2. 수급 종합 판단
-- 외국인의 선제적 움직임 (예지 능력)
-- 기관 (사모펀드, 투신) 동참도
-- 개인 연착매수 위험도
-- 수급 단계 진단
-
-### 3. 위험 요소
-- 개인 연착매수 징후
-- 신용잔고 과열 가능성
-- 단기 조정 리스크
-
-### 4. 투자 전략 제언
-- 단기 vs 중장기 관점
-- 섹터 로테이션 전망
-- 타이밍 전략
-
-응답 형식:
-JSON 형태로 다음 구조에 맞춰 답변해주세요:
-{{
-    "summary": "핵심 요약 (2-3문장)",
-    "key_points": ["핵심포인트1", "핵심포인트2", "핵심포인트3"],
-    "keywords": ["추출된키워드1", "키워드2", "키워드3"],
-    "supply_analysis": "수급 분석 요약",
-    "risk_factors": ["위험요소1", "위험요소2"],
-    "investment_recommendation": "투자 전략 제언",
-    "confidence_score": 85
-}}
-"""
-
-        return prompt
-
-    def _parse_gpt_response(self, response_text: str) -> AIAnalysisResult:
-        """GPT 응답 파싱"""
-        try:
             # JSON 부분 추출
             json_start = response_text.find('{')
             json_end = response_text.rfind('}') + 1
 
             if json_start >= 0 and json_end > json_start:
                 json_text = response_text[json_start:json_end]
-                analysis_json = json.loads(json_text)
+                result = json.loads(json_text)
 
-                return AIAnalysisResult(
-                    summary=analysis_json.get("summary", ""),
-                    key_points=analysis_json.get("key_points", []),
-                    keywords=analysis_json.get("keywords", []),
-                    supply_analysis=analysis_json.get("supply_analysis", ""),
-                    risk_factors=analysis_json.get("risk_factors", []),
-                    investment_recommendation=analysis_json.get("investment_recommendation", ""),
-                    confidence_score=analysis_json.get("confidence_score", 0.0)
-                )
+                # 유효성 검증
+                if self._validate_gpt_result(result):
+                    return result
+                else:
+                    logging.warning(f"GPT 응답 유효성 검증 실패: {stock_name}")
+                    return None
             else:
-                # JSON 파싱 실패시 텍스트 그대로 사용
-                return AIAnalysisResult(
-                    summary=response_text[:200],
-                    key_points=[response_text],
-                    keywords=["분석완료"],
-                    confidence_score=50.0
-                )
+                logging.warning(f"GPT 응답에서 JSON을 찾을 수 없음: {stock_name}")
+                return None
 
         except Exception as e:
-            logging.error(f"GPT 응답 파싱 실패: {e}")
-            return self._create_fallback_analysis()
+            logging.error(f"GPT API 호출 실패 ({stock_name}): {e}")
+            return None
 
-    def _create_fallback_analysis(self) -> AIAnalysisResult:
-        """분석 실패시 기본 응답"""
-        return AIAnalysisResult(
-            summary="AI 분석을 수행할 수 없습니다. 수동으로 뉴스와 수급을 확인해주세요.",
-            key_points=[
-                "뉴스 재료 직접 확인 필요",
-                "수급 동향 모니터링 필요",
-                "기술적 분석 병행 권장"
-            ],
-            keywords=["수동분석"],
-            supply_analysis="수급 데이터를 직접 확인해주세요.",
-            risk_factors=["AI 분석 불가"],
-            investment_recommendation="신중한 접근이 필요합니다.",
-            confidence_score=0.0
-        )
-
-    def _summarize_supply_data(self, supply_data: List[SupplyDemandData]) -> str:
-        """수급 데이터 요약"""
-        if not supply_data:
-            return "수급 데이터가 없습니다."
-
-        # 최근 5일 데이터 요약
-        recent_data = supply_data[-5:] if len(supply_data) >= 5 else supply_data
-
-        summary = "최근 수급 현황:\n"
-
-        total_foreign = sum(d.foreign_net for d in recent_data)
-        total_institution = sum(d.institution_net for d in recent_data)
-        total_individual = sum(d.individual_net for d in recent_data)
-
-        summary += f"- 외국인: {total_foreign:+,}억원\n"
-        summary += f"- 기관: {total_institution:+,}억원\n"
-        summary += f"- 개인: {total_individual:+,}억원\n"
-
-        if recent_data:
-            latest = recent_data[-1]
-            summary += f"- 최근 신용잔고: {latest.credit_balance:,}억원\n"
-
-        return summary
-
-    def _load_analysis_prompt(self) -> str:
-        """분석 프롬프트 템플릿 로드"""
-        return """
-당신은 한국 주식시장의 전문 애널리스트입니다.
-당일 발생한 뉴스와 재료를 중심으로 투자 분석을 수행합니다.
-
-특히 다음 요소들을 중점적으로 분석합니다:
-1. 혁신 재료의 임팩트
-2. 글로벌 이슈의 파급효과  
-3. 수급 흐름의 변화
-4. 시장 타이밍과 위험 요소
-
-당일성과 실시간성을 최우선으로 고려하여 분석해주세요.
-"""
-
-    def calculate_stock_score(self, stock: StockData, news_list: List[NewsData],
-                              supply_data: Optional[SupplyDemandData] = None) -> int:
-        """개별 종목 종합 점수 계산"""
+    def _validate_gpt_result(self, result: Dict) -> bool:
+        """GPT 응답 유효성 검증"""
         try:
-            score = 50  # 기본 점수
+            # 필수 필드 확인
+            required_fields = ['issue_type', 'ai_score', 'investment_opinion']
+            for field in required_fields:
+                if field not in result:
+                    return False
 
-            # 1. 등락률 점수 (30점)
-            if stock.change_rate > 10:
-                score += 30
-            elif stock.change_rate > 5:
-                score += 20
-            elif stock.change_rate > 0:
-                score += 10
+            # 값 범위 확인
+            if result['issue_type'] not in ['THEME', 'INDIVIDUAL']:
+                return False
 
-            # 2. 뉴스 재료 점수 (25점)
-            today_news = [n for n in news_list if n.is_today]
-            score += min(len(today_news) * 5, 15)  # 뉴스 개수
+            if not (1 <= result['ai_score'] <= 100):
+                return False
 
-            # 키워드 보너스
-            all_keywords = []
-            for news in today_news:
-                all_keywords.extend(news.keywords)
+            if result['investment_opinion'] not in ['강력매수', '매수', '보유', '관망', '매도']:
+                return False
 
-            premium_keywords = ['AI', '글로벌대기업', 'FDA승인', '조단위이슈']
-            keyword_bonus = len(set(all_keywords) & set(premium_keywords)) * 2
-            score += min(keyword_bonus, 10)
+            return True
 
-            # 3. 신고가 점수 (20점)
-            if stock.is_new_high_200d:
-                score += 20
-            elif stock.is_new_high_120d:
-                score += 15
-            elif stock.is_new_high_60d:
-                score += 10
-            elif stock.is_new_high_20d:
-                score += 5
+        except Exception:
+            return False
 
-            # 4. 수급 점수 (25점)
-            if supply_data:
-                if supply_data.is_foreign_buying:
-                    score += 10
-                if supply_data.is_institution_buying:
-                    score += 8
-                if supply_data.is_individual_selling:
-                    score += 7  # 개인 매도는 긍정적
+    def _print_analysis_summary(self, analysis_results: List[Dict]):
+        """AI 분석 결과 요약 출력"""
+        if not analysis_results:
+            return
 
-            return min(score, 100)  # 최대 100점
+        # 이슈 타입별 분류
+        theme_issues = [r for r in analysis_results if r['issue_type'] == 'THEME']
+        individual_issues = [r for r in analysis_results if r['issue_type'] == 'INDIVIDUAL']
+
+        # 투자 의견별 분류
+        buy_recommendations = [r for r in analysis_results if r['investment_opinion'] in ['강력매수', '매수']]
+
+        logging.info(f"\n🤖 AI 분석 결과 요약:")
+        logging.info(f"   📊 총 분석 종목: {len(analysis_results)}개")
+        logging.info(f"   🎯 테마 이슈: {len(theme_issues)}개")
+        logging.info(f"   🏢 개별 이슈: {len(individual_issues)}개")
+        logging.info(f"   💰 매수 추천: {len(buy_recommendations)}개")
+
+        # 고득점 종목 (80점 이상)
+        high_score_stocks = [r for r in analysis_results if r['ai_score'] >= 80]
+        if high_score_stocks:
+            logging.info(f"\n⭐ 고득점 종목 (80점 이상):")
+            for stock in sorted(high_score_stocks, key=lambda x: x['ai_score'], reverse=True):
+                logging.info(
+                    f"   {stock['stock_name']}: {stock['ai_score']}점 ({stock['issue_type']}) - {stock['investment_opinion']}")
+
+        # 테마 이슈 종목
+        if theme_issues:
+            logging.info(f"\n🎯 테마 이슈 종목:")
+            for stock in sorted(theme_issues, key=lambda x: x['ai_score'], reverse=True):
+                logging.info(f"   {stock['stock_name']}: {stock['issue_category']} ({stock['ai_score']}점)")
+
+    def get_analysis_results(self, analysis_date: str) -> Dict:
+        """AI 분석 결과 조회 및 분류"""
+        try:
+            ai_results = self.db.get_ai_analysis(analysis_date)
+
+            if not ai_results:
+                return {
+                    'success': False,
+                    'message': f'{analysis_date} 날짜의 AI 분석 결과가 없습니다.'
+                }
+
+            # 테마 이슈 vs 개별 이슈 분류
+            theme_issues = []
+            individual_issues = []
+
+            for result in ai_results:
+                # JSON 파싱
+                if isinstance(result['key_factors'], str):
+                    result['key_factors'] = json.loads(result['key_factors'])
+
+                if result['issue_type'] == 'THEME':
+                    theme_issues.append(result)
+                else:
+                    individual_issues.append(result)
+
+            # 점수순 정렬
+            theme_issues.sort(key=lambda x: x['ai_score'], reverse=True)
+            individual_issues.sort(key=lambda x: x['ai_score'], reverse=True)
+
+            return {
+                'success': True,
+                'total_analyzed': len(ai_results),
+                'theme_issues': theme_issues,
+                'individual_issues': individual_issues,
+                'high_score_stocks': [r for r in ai_results if r['ai_score'] >= 80],
+                'buy_recommendations': [r for r in ai_results if r['investment_opinion'] in ['강력매수', '매수']]
+            }
 
         except Exception as e:
-            logging.error(f"종목 점수 계산 실패: {e}")
-            return 50
+            logging.error(f"AI 분석 결과 조회 실패: {e}")
+            return {
+                'success': False,
+                'message': f'AI 분석 결과 조회 실패: {str(e)}'
+            }
