@@ -1,0 +1,63 @@
+<!-- templates/500.html -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>500 - 서버 오류</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .error-container {
+            text-align: center;
+            padding: 40px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .error-code {
+            font-size: 8em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            opacity: 0.8;
+        }
+        .error-message {
+            font-size: 1.5em;
+            margin-bottom: 30px;
+        }
+        .back-link {
+            display: inline-block;
+            padding: 15px 30px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid white;
+            border-radius: 50px;
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin: 5px;
+        }
+        .back-link:hover {
+            background: white;
+            color: #e74c3c;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-code">500</div>
+        <div class="error-message">서버에서 오류가 발생했습니다</div>
+        <a href="/" class="back-link">🏠 홈으로 돌아가기</a>
+        <a href="/top-rate" class="back-link">📊 등락율분석</a>
+    </div>
+</body>
+</html>

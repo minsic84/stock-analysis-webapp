@@ -477,3 +477,287 @@ def test_crawling():
             'message': f'테스트 실패: {str(e)}',
             'error_type': type(e).__name__
         }), 500
+
+
+# routes.py에 추가할 디버깅 엔드포인트들
+
+@top_rate_bp.route('/test-simple')
+def test_simple():
+    """가장 간단한 테스트"""
+    try:
+        return jsonify({
+            'success': True,
+            'message': '기본 라우트 정상 작동',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@top_rate_bp.route('/test-crawler-only')
+def test_crawler_only():
+    """크롤러만 단순 테스트"""
+    try:
+        from .crawler import NaverFinanceCrawler
+
+        crawler = NaverFinanceCrawler()
+
+        # 매우 간단한 크롤링 테스트
+        test_stocks = crawler.crawl_rising_stocks(limit=3)
+
+        return jsonify({
+            'success': True,
+            'message': f'크롤링 테스트 완료: {len(test_stocks)}개 종목',
+            'stocks': [
+                {
+                    'name': stock.stock_name,
+                    'code': stock.stock_code,
+                    'change_rate': stock.change_rate
+                }
+                for stock in test_stocks
+            ]
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@top_rate_bp.route('/test-sync-crawl-get')
+def test_sync_crawl_get():
+    """동기 방식 업종 크롤링 테스트 (GET)"""
+    try:
+        from .crawler import NaverFinanceCrawler
+
+        crawler = NaverFinanceCrawler()
+
+        # 1개 업종만 테스트
+        sectors = crawler.crawl_top_sectors(limit=1)
+
+        return jsonify({
+            'success': True,
+            'message': f'업종 크롤링 테스트 완료: {len(sectors)}개 업종',
+            'sectors': [
+                {
+                    'name': sector.sector_name,
+                    'change_rate': sector.change_rate,
+                    'stocks_count': len(sector.top_stocks) if sector.top_stocks else 0,
+                    'stocks': [
+                        {
+                            'name': stock.stock_name,
+                            'code': stock.stock_code,
+                            'change_rate': stock.change_rate
+                        }
+                        for stock in (sector.top_stocks[:2] if sector.top_stocks else [])
+                    ]
+                }
+                for sector in sectors
+            ]
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@top_rate_bp.route('/debug-imports')
+def debug_imports():
+    """import 문제 확인"""
+    try:
+        results = {}
+
+        # 기본 라이브러리들
+        try:
+            import requests
+            results['requests'] = '✓ 정상'
+        except Exception as e:
+            results['requests'] = f'✗ 오류: {str(e)}'
+
+        try:
+            from bs4 import BeautifulSoup
+            results['beautifulsoup4'] = '✓ 정상'
+        except Exception as e:
+            results['beautifulsoup4'] = f'✗ 오류: {str(e)}'
+
+        try:
+            import openai
+            results['openai'] = '✓ 정상'
+        except Exception as e:
+            results['openai'] = f'✗ 오류: {str(e)}'
+
+        # 내부 모듈들
+        try:
+            from .models import SectorData, StockData
+            results['models'] = '✓ 정상'
+        except Exception as e:
+            results['models'] = f'✗ 오류: {str(e)}'
+
+        try:
+            from .crawler import NaverFinanceCrawler
+            results['crawler'] = '✓ 정상'
+        except Exception as e:
+            results['crawler'] = f'✗ 오류: {str(e)}'
+
+        try:
+            from common.utils import safe_request
+            results['common_utils'] = '✓ 정상'
+        except Exception as e:
+            results['common_utils'] = f'✗ 오류: {str(e)}'
+
+        return jsonify({
+            'success': True,
+            'imports': results
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# routes.py에 추가할 페이지 구조 확인 함수
+
+@top_rate_bp.route('/debug-page-structure')
+def debug_page_structure():
+    """네이버 금융 페이지 구조 확인"""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        results = {}
+
+        # 1. 업종 페이지 구조 확인
+        url = "https://finance.naver.com/sise/sise_group.naver?type=upjong"
+
+        response = requests.get(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }, timeout=10)
+
+        results['status_code'] = response.status_code
+        results['content_length'] = len(response.content)
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        results['page_title'] = soup.title.text if soup.title else 'No title'
+
+        # 테이블 찾기
+        tables = soup.find_all('table')
+        results['total_tables'] = len(tables)
+
+        table_info = []
+        for i, table in enumerate(tables):
+            info = {
+                'index': i,
+                'class': table.get('class', []),
+                'id': table.get('id', ''),
+                'rows_count': len(table.find_all('tr')) if table.find_all('tr') else 0,
+                'has_tbody': table.find('tbody') is not None
+            }
+
+            # 첫 번째 행의 내용 확인
+            first_row = table.find('tr')
+            if first_row:
+                cells = first_row.find_all(['td', 'th'])
+                info['first_row_cells'] = len(cells)
+                info['first_row_sample'] = [cell.get_text().strip()[:20] for cell in cells[:3]]
+
+            table_info.append(info)
+
+        results['tables'] = table_info
+
+        # type_1 클래스 테이블 특별 확인
+        type1_table = soup.find('table', {'class': 'type_1'})
+        if type1_table:
+            results['type1_table'] = {
+                'found': True,
+                'has_tbody': type1_table.find('tbody') is not None,
+                'rows_direct': len(type1_table.find_all('tr', recursive=False)),
+                'rows_all': len(type1_table.find_all('tr')),
+                'sample_rows': []
+            }
+
+            # 처음 3개 행 샘플
+            rows = type1_table.find_all('tr')[:3]
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                sample_row = [cell.get_text().strip()[:15] for cell in cells[:5]]
+                results['type1_table']['sample_rows'].append(sample_row)
+        else:
+            results['type1_table'] = {'found': False}
+
+        return jsonify({
+            'success': True,
+            'url': url,
+            'results': results
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@top_rate_bp.route('/debug-alternative-urls')
+def debug_alternative_urls():
+    """다른 네이버 금융 URL들 테스트"""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        urls_to_test = [
+            "https://finance.naver.com/sise/sise_group.naver?type=upjong",
+            "https://finance.naver.com/sise/sise_rise.naver",
+            "https://finance.naver.com/sise/sise_fall.naver",
+            "https://finance.naver.com/sise/",
+            "https://finance.naver.com/"
+        ]
+
+        results = {}
+
+        for url in urls_to_test:
+            try:
+                response = requests.get(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }, timeout=10)
+
+                soup = BeautifulSoup(response.content, 'html.parser')
+
+                results[url] = {
+                    'status': response.status_code,
+                    'title': soup.title.text if soup.title else 'No title',
+                    'tables_count': len(soup.find_all('table')),
+                    'type1_tables': len(soup.find_all('table', {'class': 'type_1'})),
+                    'type2_tables': len(soup.find_all('table', {'class': 'type_2'})),
+                    'content_length': len(response.content)
+                }
+
+            except Exception as e:
+                results[url] = {
+                    'status': 'error',
+                    'error': str(e)
+                }
+
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
