@@ -22,7 +22,7 @@ import re
 # 프로젝트 루트 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from modules.top_rate_analysis.database import TopRateDatabase
+from modules.top_rate_analysi.database import TopRateDatabase
 
 
 class ChartSupplyAnalyzer:

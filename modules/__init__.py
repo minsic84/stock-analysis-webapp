@@ -2,63 +2,51 @@
 # -*- coding: utf-8 -*-
 
 """
-등락율상위분석 모듈 (완전 독립형)
-
-주요 기능:
-- 네이버 금융에서 테마별 상위 종목 크롤링 (theme_crawler_test.py 기반)
-- 종목별 당일 뉴스 수집 및 분석
-- OpenAI GPT를 이용한 AI 뉴스 분석 (개별이슈 vs 테마이슈 구분)
-- 일봉/수급 데이터와 결합한 종합분석
-- 완전 독립적인 DB 및 유틸 클래스 포함
+Modules 패키지 초기화
+각 독립 모듈들의 컨테이너 역할
 """
 
-__version__ = '2.0.0'
-__author__ = 'Stock Analysis Team'
+__version__ = '1.0.0'
+
+# 이 파일은 modules 패키지를 Python 패키지로 인식시키는 역할만 합니다.
+# 실제 모듈 등록은 각 하위 모듈의 register_module 함수를 통해 이루어집니다.
+
+# 사용 가능한 모듈 목록
+AVAILABLE_MODULES = [
+    'top_rate_analysi',  # 등락율상위분석
+    # 'stock_setting',    # 종목설정 (추후 추가)
+    # 'ai_analysis',      # AI분석 (추후 추가)
+    # 'chart_analysis',   # 차트분석 (추후 추가)
+]
 
 
-def register_module(app):
-    """Flask 앱에 모듈 등록"""
-    try:
-        # 상대 import 사용
-        from .routes import top_rate_bp
-        app.register_blueprint(top_rate_bp, url_prefix='/top-rate')
-        app.logger.info("✅ 등락율상위분석 모듈 등록 완료 (독립형 v2.0)")
-        return True
-    except ImportError as e:
-        app.logger.error(f"❌ 등락율상위분석 모듈 import 실패: {e}")
-        return False
-    except Exception as e:
-        app.logger.error(f"❌ 등락율상위분석 모듈 등록 실패: {e}")
-        return False
+def get_available_modules():
+    """사용 가능한 모듈 목록 반환"""
+    return AVAILABLE_MODULES
 
 
-# 필요시 개별 컴포넌트 import (선택사항)
-try:
-    from .database import TopRateDatabase
-    from .crawler import ThemeCrawler
-    from .ai_analyzer import AIAnalyzer
-    from .utils import (
-        clean_text,
-        parse_number,
-        parse_percentage,
-        safe_request,
-        group_themes_by_name,
-        calculate_theme_stats
-    )
+def register_all_modules(app):
+    """모든 사용 가능한 모듈을 앱에 등록"""
+    registered_count = 0
 
-    __all__ = [
-        'register_module',
-        'TopRateDatabase',
-        'ThemeCrawler',
-        'AIAnalyzer',
-        'clean_text',
-        'parse_number',
-        'parse_percentage',
-        'safe_request',
-        'group_themes_by_name',
-        'calculate_theme_stats'
-    ]
+    for module_name in AVAILABLE_MODULES:
+        try:
+            # 동적 import
+            module = __import__(f'modules.{module_name}', fromlist=['register_module'])
+            if hasattr(module, 'register_module'):
+                success = module.register_module(app)
+                if success:
+                    registered_count += 1
+                    app.logger.info(f"✅ {module_name} 모듈 등록 완료")
+                else:
+                    app.logger.warning(f"⚠️ {module_name} 모듈 등록 실패")
+            else:
+                app.logger.warning(f"⚠️ {module_name} 모듈에 register_module 함수가 없습니다")
 
-except ImportError:
-    # import 실패시에도 register_module은 동작하도록
-    __all__ = ['register_module']
+        except ImportError as e:
+            app.logger.warning(f"⚠️ {module_name} 모듈을 찾을 수 없습니다: {e}")
+        except Exception as e:
+            app.logger.error(f"❌ {module_name} 모듈 등록 중 오류: {e}")
+
+    app.logger.info(f"📦 총 {registered_count}/{len(AVAILABLE_MODULES)}개 모듈 등록 완료")
+    return registered_count

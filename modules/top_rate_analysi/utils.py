@@ -11,7 +11,7 @@
 import re
 import requests
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple  # ✅ Tuple 추가
+from typing import Optional, Dict, List
 import logging
 
 
@@ -38,59 +38,6 @@ def get_trading_date(target_time: Optional[datetime] = None) -> str:
         trading_date = target_time
 
     return trading_date.strftime('%Y-%m-%d')
-
-
-def get_current_trading_date() -> str:
-    """현재 거래일 반환 (별칭 함수)"""
-    return get_trading_date()
-
-
-def is_trading_hours(target_time: Optional[datetime] = None) -> bool:
-    """
-    거래시간 여부 확인
-
-    Args:
-        target_time: 기준 시간
-
-    Returns:
-        거래시간 여부
-    """
-    if target_time is None:
-        target_time = datetime.now()
-
-    # 주말 체크
-    if target_time.weekday() >= 5:  # 토(5), 일(6)
-        return False
-
-    # 시간 체크 (9:00 ~ 15:30)
-    hour = target_time.hour
-    minute = target_time.minute
-
-    if hour < 9:
-        return False
-    elif hour > 15:
-        return False
-    elif hour == 15 and minute > 30:
-        return False
-
-    return True
-
-
-def format_date_for_display(date_str: str) -> str:
-    """
-    날짜를 표시용으로 포맷
-
-    Args:
-        date_str: YYYY-MM-DD 형식
-
-    Returns:
-        YYYY년 MM월 DD일 형식
-    """
-    try:
-        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-        return date_obj.strftime('%Y년 %m월 %d일')
-    except:
-        return date_str
 
 
 def get_table_name(date_str: str) -> str:

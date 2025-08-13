@@ -5,6 +5,7 @@ from flask import Flask, render_template, send_from_directory
 from config import get_config
 import os
 import logging
+import traceback  # 디버깅용 추가
 
 
 def create_app():
@@ -70,20 +71,23 @@ def create_app():
 def register_blueprints(app):
     """블루프린트 등록"""
 
-    # 등락율상위분석 모듈 (독립형)
+    # 등락율상위분석 모듈 (개별 등록)
     try:
         from modules.top_rate_analysis import register_module
-        register_module(app)
-        app.logger.info("✅ 등락율상위분석 모듈 등록 완료")
+        success = register_module(app)
+        if success:
+            app.logger.info("✅ 등락율상위분석 모듈 등록 완료")
+        else:
+            app.logger.warning("⚠️ 등락율상위분석 모듈 등록 실패")
+    except ImportError as e:
+        app.logger.error(f"❌ 등락율상위분석 모듈 import 실패: {e}")
+        app.logger.info("🔍 다음 사항을 확인해주세요:")
+        app.logger.info("   1. modules/top_rate_analysis/ 폴더가 존재하는가?")
+        app.logger.info("   2. modules/top_rate_analysis/__init__.py 파일이 있는가?")
+        app.logger.info("   3. 모든 필수 파일들이 생성되었는가?")
     except Exception as e:
-        app.logger.error(f"❌ 등락율상위분석 모듈 등록 실패: {e}")
-
-    # 추후 다른 모듈들 추가 가능
-    # try:
-    #     from modules.stock_setting import register_module as register_stock_setting
-    #     register_stock_setting(app)
-    # except Exception as e:
-    #     app.logger.error(f"종목설정 모듈 등록 실패: {e}")
+        app.logger.error(f"❌ 등락율상위분석 모듈 등록 중 오류: {e}")
+        app.logger.error(f"   스택 트레이스: {traceback.format_exc()}")  # 상세 오류 정보
 
 
 if __name__ == '__main__':

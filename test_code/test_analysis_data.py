@@ -14,8 +14,8 @@ from datetime import datetime
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from modules.top_rate_analysis.database import TopRateDatabase
-from modules.top_rate_analysis.utils import group_themes_by_name, calculate_theme_stats
+from modules.top_rate_analysi.database import TopRateDatabase
+from modules.top_rate_analysi.utils import group_themes_by_name, calculate_theme_stats
 
 
 def test_db_connection():

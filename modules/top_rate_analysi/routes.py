@@ -11,13 +11,13 @@
 import json
 import logging
 import threading
-from datetime import datetime  # ✅ datetime import 추가
+from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, current_app
 
 from .database import TopRateDatabase
 from .crawler import TopRateCrawler, crawling_progress
 from .scheduler import TopRateScheduler, get_scheduler
-from .utils import get_trading_date, get_table_name, calculate_theme_stats, format_date_for_display
+from .utils import get_trading_date, get_table_name, calculate_theme_stats
 
 # Blueprint 생성
 top_rate_bp = Blueprint(
@@ -33,8 +33,16 @@ db = TopRateDatabase()
 scheduler = None
 
 
-# Flask 2.2+ 에서는 before_app_first_request가 제거됨
-# 대신 register_module에서 초기화하도록 변경
+@top_rate_bp.before_app_first_request
+def init_scheduler():
+    """앱 첫 요청 전 스케줄러 초기화"""
+    global scheduler
+    try:
+        scheduler = get_scheduler()
+        scheduler.init_app(current_app)
+    except Exception as e:
+        current_app.logger.error(f"스케줄러 초기화 실패: {e}")
+
 
 # ============= 페이지 라우트 =============
 
@@ -42,15 +50,6 @@ scheduler = None
 def index():
     """등락율상위분석 메인 페이지"""
     try:
-        # 스케줄러 지연 초기화
-        global scheduler
-        if scheduler is None:
-            try:
-                scheduler = get_scheduler()
-                # scheduler.init_app(current_app)  # 필요시 여기서 초기화
-            except Exception as e:
-                current_app.logger.warning(f"스케줄러 초기화 지연: {e}")
-
         # 현재 거래일 계산
         trading_date = get_trading_date()
 
@@ -354,140 +353,54 @@ def stop_crawling():
 
 @top_rate_bp.route('/api/theme-summary')
 def get_theme_summary():
-    """테마별 요약 데이터 조회 (분석 로직)"""
+    """테마별 요약 데이터 조회"""
     try:
-        # 날짜 파라미터 처리
-        date_str = request.args.get('date')
+        date_str = request.args.get('date', get_trading_date())
 
-        if not date_str:
-            # 날짜가 없으면 현재 거래일 사용
-            date_str = get_trading_date()
-
-        # 날짜 유효성 검증
-        try:
-            datetime.strptime(date_str, '%Y-%m-%d')
-        except ValueError:
-            return jsonify({
-                'success': False,
-                'message': '잘못된 날짜 형식입니다. YYYY-MM-DD 형식을 사용하세요.',
-                'themes': []
-            }), 400
-
-        # 데이터 존재 여부 확인
+        # 데이터 존재 확인
         table_name = get_table_name(date_str)
         if not db.check_table_exists(table_name):
             return jsonify({
                 'success': False,
                 'message': f'{date_str} 데이터가 없습니다. 먼저 데이터를 수집해주세요.',
-                'themes': [],
-                'date': date_str,
-                'available_dates': db.get_available_dates()
-            })
-
-        # 크롤링 상태 확인
-        crawling_status = db.get_crawling_status(date_str)
-        if not crawling_status['exists'] or crawling_status['total_stocks'] == 0:
-            return jsonify({
-                'success': False,
-                'message': f'{date_str} 데이터가 비어있습니다.',
-                'themes': [],
-                'date': date_str
+                'themes': []
             })
 
         # 테마 요약 조회
         themes = db.get_theme_summary(date_str)
 
-        if not themes:
-            return jsonify({
-                'success': False,
-                'message': f'{date_str} 테마 데이터를 분석할 수 없습니다.',
-                'themes': [],
-                'date': date_str
-            })
+        # 아이콘 매핑 (확장 가능)
+        icon_mapping = {
+            '증권': '🏦', 'AI반도체': '🤖', '2차전지': '🔋',
+            '바이오': '🧬', '게임': '🎮', '자동차': '🚗',
+            '화학': '⚗️', '조선': '🚢', '항공': '✈️',
+            '건설': '🏗️', '통신': '📡', '은행': '🏛️'
+        }
 
-        # 성공 응답
-        current_app.logger.info(f"✅ 테마 분석 완료: {date_str}, {len(themes)}개 테마")
+        # 아이콘 추가 및 데이터 정리
+        for theme in themes:
+            theme['icon'] = icon_mapping.get(theme['theme_name'], '📊')
+            theme['rising_ratio'] = (theme['rising_stocks'] / theme['stock_count'] * 100) if theme[
+                                                                                                 'stock_count'] > 0 else 0
 
         return jsonify({
             'success': True,
             'date': date_str,
             'themes': themes,
-            'total_themes': len(themes),
-            'summary': {
-                'total_stocks': crawling_status['total_stocks'],
-                'last_updated': crawling_status['last_updated'].isoformat() if crawling_status[
-                    'last_updated'] else None,
-                'avg_themes_per_stock': sum(t['stock_count'] for t in themes) / len(themes) if themes else 0,
-                'total_news': sum(t['total_news'] for t in themes),
-                'top_theme': themes[0]['theme_name'] if themes else None
-            }
+            'total_themes': len(themes)
         })
 
     except Exception as e:
-        current_app.logger.error(f"❌ 테마 요약 조회 실패: {e}")
+        current_app.logger.error(f"테마 요약 조회 실패: {e}")
         return jsonify({
             'success': False,
-            'message': f'테마 요약 조회 실패: {str(e)}',
+            'message': f'테마 요약 조회 실패: {e}',
             'themes': []
         }), 500
 
 
-@top_rate_bp.route('/api/check-date-data')
-def check_date_data():
-    """특정 날짜의 데이터 존재 여부 확인"""
-    try:
-        date_str = request.args.get('date')
-
-        if not date_str:
-            return jsonify({
-                'success': False,
-                'message': '날짜 파라미터가 필요합니다.'
-            }), 400
-
-        # 날짜 유효성 검증
-        try:
-            datetime.strptime(date_str, '%Y-%m-%d')
-        except ValueError:
-            return jsonify({
-                'success': False,
-                'message': '잘못된 날짜 형식입니다.',
-                'has_data': False
-            }), 400
-
-        # 데이터 존재 여부 및 상태 확인
-        crawling_status = db.get_crawling_status(date_str)
-
-        # 현재 거래일과 비교
-        current_trading_date = get_trading_date()
-        is_current_date = (date_str == current_trading_date)
-
-        # 과거/미래 날짜 구분
-        selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        today = datetime.now().date()
-
-        return jsonify({
-            'success': True,
-            'date': date_str,
-            'has_data': crawling_status['exists'] and crawling_status['total_stocks'] > 0,
-            'is_current_trading_date': is_current_date,
-            'can_collect': is_current_date,  # 현재 거래일만 수집 가능
-            'can_analyze': crawling_status['exists'] and crawling_status['total_stocks'] > 0,
-            'status': crawling_status,
-            'date_info': {
-                'is_past': selected_date < today,
-                'is_future': selected_date > today,
-                'is_today': selected_date == today,
-                'formatted': format_date_for_display(date_str)
-            }
-        })
-
-    except Exception as e:
-        current_app.logger.error(f"날짜 데이터 확인 실패: {e}")
-        return jsonify({
-            'success': False,
-            'message': f'날짜 확인 실패: {str(e)}',
-            'has_data': False
-        }), 500
+@top_rate_bp.route('/api/theme-detail')
+def get_theme_detail():
     """특정 테마 상세정보 조회"""
     try:
         date_str = request.args.get('date', get_trading_date())

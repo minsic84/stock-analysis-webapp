@@ -245,7 +245,7 @@ class TopRateDatabase:
 
     def get_theme_summary(self, date_str: str) -> List[Dict]:
         """
-        테마별 요약 통계 조회 (분석용)
+        테마별 요약 통계 조회
 
         Args:
             date_str: YYYY-MM-DD 형식의 날짜
@@ -257,69 +257,47 @@ class TopRateDatabase:
 
         try:
             if not self.check_table_exists(table_name):
-                logging.warning(f"테이블이 존재하지 않습니다: {table_name}")
                 return []
 
             connection = self.get_connection(self.crawling_db)
             cursor = connection.cursor(pymysql.cursors.DictCursor)
 
-            # 테마별 집계 쿼리 (JSON 배열의 첫 번째 테마 기준)
+            # 테마별 집계 쿼리
             query = f"""
             SELECT 
                 JSON_UNQUOTE(JSON_EXTRACT(themes, '$[0]')) as theme_name,
                 COUNT(*) as stock_count,
-                ROUND(AVG(change_rate), 2) as avg_change_rate,
-                ROUND(MAX(change_rate), 2) as max_change_rate,
+                AVG(change_rate) as avg_change_rate,
+                MAX(change_rate) as max_change_rate,
                 SUM(CASE WHEN change_rate > 0 THEN 1 ELSE 0 END) as rising_stocks,
-                SUM(JSON_LENGTH(news)) as total_news,
+                (
+                    SELECT COUNT(*)
+                    FROM {table_name} t2 
+                    WHERE JSON_EXTRACT(t2.news, '$') != 'null' 
+                    AND JSON_LENGTH(t2.news) > 0
+                    AND JSON_EXTRACT(t2.themes, '$[0]') = JSON_EXTRACT(themes, '$[0]')
+                ) as total_news,
                 (
                     SELECT CONCAT(stock_name, ' (+', ROUND(change_rate, 1), '%)')
-                    FROM {table_name} t2
-                    WHERE JSON_EXTRACT(t2.themes, '$[0]') = JSON_EXTRACT({table_name}.themes, '$[0]')
+                    FROM {table_name} t3
+                    WHERE JSON_EXTRACT(t3.themes, '$[0]') = JSON_EXTRACT(themes, '$[0]')
                     ORDER BY change_rate DESC 
                     LIMIT 1
-                ) as top_stock,
-                GROUP_CONCAT(
-                    CONCAT(stock_name, ':', ROUND(change_rate, 1), '%') 
-                    ORDER BY change_rate DESC 
-                    SEPARATOR '|'
-                ) as all_stocks
+                ) as top_stock
             FROM {table_name}
-            WHERE JSON_LENGTH(themes) > 0 
-            AND JSON_UNQUOTE(JSON_EXTRACT(themes, '$[0]')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(themes, '$[0]')) != ''
+            WHERE JSON_LENGTH(themes) > 0
             GROUP BY JSON_UNQUOTE(JSON_EXTRACT(themes, '$[0]'))
-            HAVING theme_name IS NOT NULL
+            HAVING theme_name IS NOT NULL AND theme_name != ''
             ORDER BY avg_change_rate DESC
             """
 
             cursor.execute(query)
             results = cursor.fetchall()
 
-            # 아이콘 매핑 추가
-            icon_mapping = {
-                '증권': '🏦', 'AI반도체': '🤖', '2차전지': '🔋',
-                '바이오': '🧬', '게임': '🎮', '자동차': '🚗',
-                '화학': '⚗️', '조선': '🚢', '항공': '✈️',
-                '건설': '🏗️', '통신': '📡', '은행': '🏛️',
-                '반도체': '💾', '헬스케어': '🏥', '엔터테인먼트': '🎭',
-                '코로나19': '🦠', 'K-pop': '🎵', '메타버스': '🌐',
-                '전기차': '⚡', '친환경': '🌱', '우주항공': '🚀',
-                '로봇': '🤖', 'VR/AR': '🥽', '블록체인': '⛓️'
-            }
-
-            # 결과 가공
-            for result in results:
-                result['icon'] = icon_mapping.get(result['theme_name'], '📊')
-                result['rising_ratio'] = (
-                    result['rising_stocks'] / result['stock_count'] * 100
-                    if result['stock_count'] > 0 else 0
-                )
-
             cursor.close()
             connection.close()
 
-            logging.info(f"✅ 테마 요약 조회 완료: {len(results)}개 테마 ({date_str})")
+            logging.info(f"✅ 테마 요약 조회 완료: {len(results)}개 테마")
             return results
 
         except Exception as e:

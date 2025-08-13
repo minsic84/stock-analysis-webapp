@@ -35,16 +35,9 @@ def register_module(app):
         # Blueprint 등록
         app.register_blueprint(top_rate_bp, url_prefix='/top-rate')
 
-        # 스케줄러 초기화 (선택사항) - 개발 환경에서는 비활성화
-        if not app.config.get('DEBUG', False) or app.config.get('ENABLE_SCHEDULER', False):
-            try:
-                scheduler = TopRateScheduler()
-                scheduler.init_app(app)
-                app.logger.info("✅ TopRateScheduler 초기화 완료")
-            except Exception as e:
-                app.logger.warning(f"⚠️ TopRateScheduler 초기화 실패: {e}")
-        else:
-            app.logger.info("ℹ️ 개발 모드: TopRateScheduler 비활성화")
+        # 스케줄러 초기화 (선택사항)
+        scheduler = TopRateScheduler()
+        scheduler.init_app(app)
 
         app.logger.info("✅ 등락율상위분석 모듈 등록 완료 (독립형 v3.0)")
         return True
