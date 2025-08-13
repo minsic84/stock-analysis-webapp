@@ -4,7 +4,756 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>등락율상위분석 - 주식분석 웹앱</title>
-    <link rel="stylesheet" href="{{ url_for('top_rate_analysis.static', filename='css/top_rate_analysis.css') }}">
+    <style>
+        /* 등락율상위분석 전용 CSS */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* 좌측 사이드바 */
+        .sidebar {
+            width: 250px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 0;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+
+        .logo {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.5em;
+            font-weight: bold;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+            margin-bottom: 20px;
+        }
+
+        .menu-item {
+            padding: 15px 25px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border-left: 4px solid transparent;
+            text-decoration: none;
+            color: white;
+            display: block;
+        }
+
+        .menu-item:hover {
+            background: rgba(255,255,255,0.1);
+            border-left-color: #fff;
+            text-decoration: none;
+            color: white;
+        }
+
+        .menu-item.active {
+            background: rgba(255,255,255,0.2);
+            border-left-color: #fff;
+            font-weight: bold;
+        }
+
+        /* 메인 컨텐츠 */
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+
+        .header {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.1em;
+        }
+
+        /* 컨트롤 패널 */
+        .control-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .date-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .date-selector label {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .date-input {
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .date-input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .mode-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .mode-selector label {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .mode-toggle {
+            display: flex;
+            background: #e9ecef;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .mode-option {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+
+        .mode-option.active {
+            background: #3498db;
+            color: white;
+        }
+
+        .mode-option:hover:not(.active) {
+            background: #dee2e6;
+        }
+
+        .schedule-info {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .schedule-info label {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .schedule-status {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .schedule-status.active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        /* 버튼 컨트롤 */
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            font-size: 14px;
+            position: relative;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+        }
+
+        .btn-info {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #6c757d, #5a6268);
+            color: white;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        /* 상태 메시지 */
+        .status-message {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .status-message.info {
+            border-left-color: #3498db;
+            background: #ebf3fd;
+        }
+
+        .status-message.warning {
+            border-left-color: #f39c12;
+            background: #fef9e7;
+        }
+
+        .status-message.error {
+            border-left-color: #e74c3c;
+            background: #fdebea;
+        }
+
+        /* 진행률 바 */
+        .progress-container {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .progress-container h4 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            width: 0%;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.3) 50%, transparent 70%);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        /* 테마 섹션 */
+        .theme-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            overflow: hidden;
+        }
+
+        .section-header {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
+            color: white;
+            padding: 20px;
+            font-size: 1.3em;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .theme-stats {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+
+        .theme-list {
+            padding: 0;
+        }
+
+        .theme-item {
+            border-bottom: 1px solid #eee;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .theme-item:last-child {
+            border-bottom: none;
+        }
+
+        .theme-item:hover {
+            background: #f8f9fa;
+        }
+
+        .theme-header {
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .theme-info {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .theme-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .theme-meta {
+            display: flex;
+            gap: 10px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .stock-count {
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .news-count {
+            background: #d4edda;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .theme-change {
+            font-size: 1.1em;
+            font-weight: bold;
+            padding: 8px 15px;
+            border-radius: 6px;
+            color: white;
+        }
+
+        .theme-change.positive {
+            background: #e74c3c;
+        }
+
+        .theme-change.negative {
+            background: #3498db;
+        }
+
+        /* 테마 상세 */
+        .theme-details {
+            background: #f8f9fa;
+            padding: 20px;
+            border-top: 1px solid #eee;
+            display: none;
+        }
+
+        .theme-details.show {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                max-height: 0;
+                opacity: 0;
+            }
+            to {
+                max-height: 1000px;
+                opacity: 1;
+            }
+        }
+
+        .stock-grid {
+            display: grid;
+            gap: 15px;
+        }
+
+        .stock-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .stock-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .stock-name {
+            font-weight: bold;
+            font-size: 1.1em;
+            color: #2c3e50;
+        }
+
+        .stock-price {
+            text-align: right;
+        }
+
+        .price {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .change {
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+
+        .change.positive {
+            color: #e74c3c;
+        }
+
+        .change.negative {
+            color: #3498db;
+        }
+
+        .news-list {
+            margin-top: 10px;
+        }
+
+        .news-item {
+            padding: 8px 0;
+            border-bottom: 1px dotted #ddd;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .news-item:last-child {
+            border-bottom: none;
+        }
+
+        .news-item a {
+            text-decoration: none;
+            color: #3498db;
+            transition: color 0.3s;
+        }
+
+        .news-item a:hover {
+            color: #2980b9;
+            text-decoration: underline;
+        }
+
+        .no-stocks {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+            font-style: italic;
+        }
+
+        /* AI 분석 섹션 */
+        .ai-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin: 20px 0;
+        }
+
+        .ai-section h3 {
+            margin-bottom: 15px;
+            font-size: 1.4em;
+        }
+
+        .ai-summary {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .ai-results {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .ai-category {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .ai-category h4 {
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .ai-stock-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .ai-stock-item {
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 6px;
+            border-left: 3px solid rgba(255,255,255,0.3);
+        }
+
+        .investment-recommendations {
+            margin-top: 20px;
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .recommendation-item {
+            padding: 8px 0;
+            border-bottom: 1px dotted rgba(255,255,255,0.3);
+        }
+
+        .recommendation-item:last-child {
+            border-bottom: none;
+        }
+
+        /* 종합분석 섹션 */
+        .comprehensive-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin: 20px 0;
+            overflow: hidden;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .chart-item {
+            text-align: center;
+        }
+
+        .chart-item h4 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        .chart-placeholder {
+            width: 100%;
+            height: 300px;
+            background: #f8f9fa;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .score-summary {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .score-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .score-grade {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        /* 알림 메시지 */
+        .alert {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 1000;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .alert-success {
+            background: #27ae60;
+        }
+
+        .alert-error {
+            background: #e74c3c;
+        }
+
+        .alert-warning {
+            background: #f39c12;
+        }
+
+        .alert-info {
+            background: #3498db;
+        }
+
+        .alert button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            float: right;
+            margin-left: 10px;
+        }
+
+        /* 반응형 디자인 */
+        @media (max-width: 1200px) {
+            .ai-results {
+                grid-template-columns: 1fr;
+            }
+
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                order: 2;
+            }
+
+            .main-content {
+                order: 1;
+                padding: 20px;
+            }
+
+            .control-panel {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .btn {
+                width: 100%;
+                text-align: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.5em;
+            }
+
+            .btn {
+                padding: 10px 16px;
+                font-size: 12px;
+            }
+
+            .theme-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .stock-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -334,6 +1083,7 @@
                 const data = await response.json();
 
                 if (data.success) {
+                    console.log('🔍 받은 테마 데이터:', data);
                     displayThemes(data.themes, data.stats);
                     document.getElementById('themeSection').style.display = 'block';
                     document.getElementById('aiBtn').disabled = false;
@@ -347,8 +1097,10 @@
             }
         }
 
-        // 테마 데이터 표시
+        // 테마 데이터 표시 (안전한 버전)
         function displayThemes(themes, stats) {
+            console.log('🔍 테마 데이터 구조 확인:', themes);
+
             // 통계 업데이트
             document.getElementById('themeStats').textContent =
                 `${stats.theme_count}개 테마 • ${stats.stock_count}개 종목 • ${stats.news_count}개 뉴스`;
@@ -357,36 +1109,70 @@
             const themeList = document.getElementById('themeList');
             themeList.innerHTML = '';
 
+            if (!themes || typeof themes !== 'object') {
+                themeList.innerHTML = '<div class="no-stocks">테마 데이터가 없습니다.</div>';
+                return;
+            }
+
             Object.values(themes).forEach((theme, index) => {
                 const themeItem = createThemeItem(theme, index);
                 themeList.appendChild(themeItem);
             });
         }
 
-        // 테마 아이템 생성
+        // 테마 아이템 생성 (안전한 버전)
         function createThemeItem(theme, index) {
+            console.log('🔍 개별 테마 데이터:', theme);
+
             const themeItem = document.createElement('div');
             themeItem.className = 'theme-item';
             themeItem.onclick = () => toggleTheme(index);
 
-            const changeClass = theme.avg_change_rate > 0 ? 'positive' : 'negative';
+            // 안전한 평균 등락률 계산
+            let avgChangeRate = 0;
+            if (theme.avg_change_rate !== undefined && theme.avg_change_rate !== null && !isNaN(theme.avg_change_rate)) {
+                avgChangeRate = theme.avg_change_rate;
+            } else if (theme.stocks && Array.isArray(theme.stocks) && theme.stocks.length > 0) {
+                const totalRate = theme.stocks.reduce((sum, stock) => {
+                    const rate = stock.change_rate || 0;
+                    return sum + (isNaN(rate) ? 0 : rate);
+                }, 0);
+                avgChangeRate = totalRate / theme.stocks.length;
+            }
+
+            const changeClass = avgChangeRate > 0 ? 'positive' : 'negative';
+            const changeSign = avgChangeRate > 0 ? '+' : '';
+
+            // 안전한 뉴스 개수 계산
+            let totalNewsCount = 0;
+            if (theme.stocks && Array.isArray(theme.stocks)) {
+                totalNewsCount = theme.stocks.reduce((sum, stock) => {
+                    if (stock.news && Array.isArray(stock.news)) {
+                        return sum + stock.news.length;
+                    }
+                    return sum;
+                }, 0);
+            }
+
+            // 안전한 종목 수 계산
+            const stockCount = theme.stocks ? theme.stocks.length : (theme.total_stocks || 0);
 
             themeItem.innerHTML = `
                 <div class="theme-header">
                     <div class="theme-info">
-                        <div class="theme-name">${theme.theme_name}</div>
+                        <div class="theme-name">${theme.theme_name || '테마명 없음'}</div>
                         <div class="theme-meta">
-                            <span class="stock-count">${theme.total_stocks}개 종목</span>
-                            <span class="news-count">${theme.stocks.reduce((sum, stock) => sum + stock.news.length, 0)}개 뉴스</span>
+                            <span class="stock-count">${stockCount}개 종목</span>
+                            <span class="news-count">${totalNewsCount}개 뉴스</span>
                         </div>
                     </div>
                     <div class="theme-change ${changeClass}">
-                        ${theme.avg_change_rate > 0 ? '+' : ''}${theme.avg_change_rate.toFixed(2)}%
+                        ${changeSign}${avgChangeRate.toFixed(2)}%
                     </div>
                 </div>
                 <div class="theme-details" id="theme-${index}">
                     <div class="stock-grid">
-                        ${theme.stocks.map(stock => createStockCard(stock)).join('')}
+                        ${createStockCards(theme.stocks || [])}
                     </div>
                 </div>
             `;
@@ -394,35 +1180,69 @@
             return themeItem;
         }
 
-        // 종목 카드 생성
+        // 종목 카드들 생성 (안전한 버전)
+        function createStockCards(stocks) {
+            if (!stocks || !Array.isArray(stocks) || stocks.length === 0) {
+                return '<div class="no-stocks">종목 정보가 없습니다.</div>';
+            }
+
+            return stocks.map(stock => createStockCard(stock)).join('');
+        }
+
+        // 종목 카드 생성 (안전한 버전)
         function createStockCard(stock) {
-            const changeClass = stock.change_rate > 0 ? 'positive' : 'negative';
-            const changeSign = stock.change_rate > 0 ? '+' : '';
+            if (!stock) {
+                return '<div class="stock-card">종목 정보 오류</div>';
+            }
+
+            const changeRate = stock.change_rate || 0;
+            const price = stock.price || 0;
+            const stockName = stock.stock_name || stock.name || '종목명 없음';
+            const news = stock.news || [];
+
+            const changeClass = changeRate > 0 ? 'positive' : 'negative';
+            const changeSign = changeRate > 0 ? '+' : '';
 
             return `
                 <div class="stock-card">
                     <div class="stock-header">
-                        <div class="stock-name">${stock.stock_name}</div>
+                        <div class="stock-name">${stockName}</div>
                         <div class="stock-price">
-                            <div class="price">${stock.price.toLocaleString()}원</div>
-                            <div class="change ${changeClass}">${changeSign}${stock.change_rate.toFixed(2)}%</div>
+                            <div class="price">${price.toLocaleString()}원</div>
+                            <div class="change ${changeClass}">${changeSign}${changeRate.toFixed(2)}%</div>
                         </div>
                     </div>
                     <div class="news-list">
-                        ${stock.news.slice(0, 3).map(news => `
-                            <div class="news-item">
-                                📰 <a href="${news.url}" target="_blank">${news.title}</a>
-                            </div>
-                        `).join('')}
+                        ${createNewsList(news)}
                     </div>
                 </div>
             `;
         }
 
+        // 뉴스 리스트 생성 (안전한 버전)
+        function createNewsList(news) {
+            if (!news || !Array.isArray(news) || news.length === 0) {
+                return '<div class="news-item">📰 최근 뉴스가 없습니다.</div>';
+            }
+
+            return news.slice(0, 3).map(newsItem => {
+                const title = newsItem.title || '제목 없음';
+                const url = newsItem.url || '#';
+
+                return `
+                    <div class="news-item">
+                        📰 <a href="${url}" target="_blank">${title}</a>
+                    </div>
+                `;
+            }).join('');
+        }
+
         // 테마 토글
         function toggleTheme(index) {
             const details = document.getElementById(`theme-${index}`);
-            details.classList.toggle('show');
+            if (details) {
+                details.classList.toggle('show');
+            }
         }
 
         // AI 분석 시작
