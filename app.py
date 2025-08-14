@@ -8,6 +8,7 @@ import logging
 import traceback  # 디버깅용 추가
 
 
+
 def create_app():
     """Flask 애플리케이션 팩토리"""
     app = Flask(__name__)
