@@ -562,3 +562,261 @@ class TopRateDatabase:
                 'last_updated': None,
                 'theme_count': 0
             }
+
+    def get_theme_statistics(self, date_str: str) -> List[Dict]:
+        """
+        특정 날짜의 테마별 통계 조회
+
+        Args:
+            date_str: 날짜 (YYYY-MM-DD)
+
+        Returns:
+            테마별 통계 리스트
+        """
+        try:
+            table_name = get_table_name(date_str)
+
+            if not self.table_exists(table_name):
+                logging.warning(f"테이블이 존재하지 않음: {table_name}")
+                return []
+
+            connection = self.get_connection(self.crawling_db)
+            cursor = connection.cursor()
+
+            # 테마별 기본 통계 조회
+            query = f"""
+            SELECT 
+                theme_name,
+                COUNT(*) as stock_count,
+                AVG(CAST(change_rate AS DECIMAL(10,2))) as avg_change_rate,
+                AVG(CAST(volume_ratio AS DECIMAL(10,2))) as avg_volume_ratio,
+                SUM(CAST(volume AS BIGINT)) as total_volume,
+                SUM(CASE WHEN CAST(change_rate AS DECIMAL(10,2)) > 0 THEN 1 ELSE 0 END) as positive_stocks
+            FROM {table_name}
+            WHERE theme_name IS NOT NULL 
+                AND theme_name != ''
+            GROUP BY theme_name
+            ORDER BY avg_change_rate DESC
+            """
+
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+            # 결과를 딕셔너리 리스트로 변환
+            themes = []
+            for row in results:
+                theme_data = {
+                    'theme_name': row[0],
+                    'stock_count': row[1] or 0,
+                    'avg_change_rate': float(row[2]) if row[2] else 0.0,
+                    'avg_volume_ratio': float(row[3]) if row[3] else 0.0,
+                    'total_volume': int(row[4]) if row[4] else 0,
+                    'positive_stocks': row[5] or 0
+                }
+                themes.append(theme_data)
+
+            cursor.close()
+            connection.close()
+
+            logging.info(f"테마 통계 조회 완료: {len(themes)}개 테마")
+            return themes
+
+        except Exception as e:
+            logging.error(f"테마 통계 조회 실패: {e}")
+            return []
+
+    def get_theme_detail(self, date_str: str, theme_name: str) -> Dict:
+        """
+        특정 테마의 상세 정보 조회
+
+        Args:
+            date_str: 날짜 (YYYY-MM-DD)
+            theme_name: 테마명
+
+        Returns:
+            테마 상세정보 딕셔너리
+        """
+        try:
+            table_name = get_table_name(date_str)
+
+            if not self.table_exists(table_name):
+                logging.warning(f"테이블이 존재하지 않음: {table_name}")
+                return {}
+
+            connection = self.get_connection(self.crawling_db)
+            cursor = connection.cursor()
+
+            # 해당 테마의 모든 종목 조회
+            query = f"""
+            SELECT 
+                stock_code,
+                stock_name,
+                current_price,
+                change_rate,
+                volume,
+                volume_ratio,
+                market_cap,
+                crawled_at
+            FROM {table_name}
+            WHERE theme_name = %s
+            ORDER BY CAST(change_rate AS DECIMAL(10,2)) DESC
+            """
+
+            cursor.execute(query, (theme_name,))
+            results = cursor.fetchall()
+
+            if not results:
+                cursor.close()
+                connection.close()
+                return {}
+
+            # 종목 리스트 구성
+            stocks = []
+            for row in results:
+                stock_data = {
+                    'stock_code': row[0],
+                    'stock_name': row[1],
+                    'current_price': int(row[2]) if row[2] else 0,
+                    'change_rate': float(row[3]) if row[3] else 0.0,
+                    'volume': int(row[4]) if row[4] else 0,
+                    'volume_ratio': float(row[5]) if row[5] else 0.0,
+                    'market_cap': int(row[6]) if row[6] else 0,
+                    'crawled_at': row[7]
+                }
+                stocks.append(stock_data)
+
+            # 테마 요약 통계
+            total_stocks = len(stocks)
+            avg_change_rate = sum(s['change_rate'] for s in stocks) / total_stocks if total_stocks > 0 else 0
+            positive_stocks = len([s for s in stocks if s['change_rate'] > 0])
+            total_volume = sum(s['volume'] for s in stocks)
+
+            theme_detail = {
+                'theme_name': theme_name,
+                'date': date_str,
+                'summary': {
+                    'total_stocks': total_stocks,
+                    'avg_change_rate': avg_change_rate,
+                    'positive_stocks': positive_stocks,
+                    'positive_ratio': (positive_stocks / total_stocks * 100) if total_stocks > 0 else 0,
+                    'total_volume': total_volume
+                },
+                'stocks': stocks,
+                'news': []  # 뉴스는 별도 구현 필요
+            }
+
+            cursor.close()
+            connection.close()
+
+            logging.info(f"테마 상세정보 조회 완료: {theme_name} ({total_stocks}개 종목)")
+            return theme_detail
+
+        except Exception as e:
+            logging.error(f"테마 상세정보 조회 실패: {e}")
+            return {}
+
+    def has_date_data(self, date_str: str) -> bool:
+        """
+        특정 날짜의 데이터 존재 여부 확인
+
+        Args:
+            date_str: 날짜 (YYYY-MM-DD)
+
+        Returns:
+            데이터 존재 여부
+        """
+        try:
+            table_name = get_table_name(date_str)
+
+            if not self.table_exists(table_name):
+                return False
+
+            connection = self.get_connection(self.crawling_db)
+            cursor = connection.cursor()
+
+            # 데이터 개수 확인
+            query = f"SELECT COUNT(*) FROM {table_name}"
+            cursor.execute(query)
+            count = cursor.fetchone()[0]
+
+            cursor.close()
+            connection.close()
+
+            return count > 0
+
+        except Exception as e:
+            logging.error(f"데이터 존재 확인 실패: {e}")
+            return False
+
+    def get_crawling_status(self, date_str: str) -> Dict:
+        """
+        특정 날짜의 크롤링 상태 정보 조회
+
+        Args:
+            date_str: 날짜 (YYYY-MM-DD)
+
+        Returns:
+            크롤링 상태 정보
+        """
+        try:
+            table_name = get_table_name(date_str)
+
+            # 테이블 존재 여부 확인
+            table_exists = self.table_exists(table_name)
+
+            if not table_exists:
+                return {
+                    'exists': False,
+                    'table_name': table_name,
+                    'total_stocks': 0,
+                    'total_themes': 0,
+                    'last_update': None,
+                    'is_complete': False
+                }
+
+            connection = self.get_connection(self.crawling_db)
+            cursor = connection.cursor()
+
+            # 기본 통계 조회
+            stats_query = f"""
+            SELECT 
+                COUNT(*) as total_stocks,
+                COUNT(DISTINCT theme_name) as total_themes,
+                MAX(crawled_at) as last_update
+            FROM {table_name}
+            WHERE theme_name IS NOT NULL AND theme_name != ''
+            """
+
+            cursor.execute(stats_query)
+            stats = cursor.fetchone()
+
+            total_stocks = stats[0] or 0
+            total_themes = stats[1] or 0
+            last_update = stats[2]
+
+            # 완료 여부 판단 (임계값 기준)
+            is_complete = total_stocks >= 100 and total_themes >= 10
+
+            cursor.close()
+            connection.close()
+
+            return {
+                'exists': True,
+                'table_name': table_name,
+                'total_stocks': total_stocks,
+                'total_themes': total_themes,
+                'last_update': last_update,
+                'is_complete': is_complete
+            }
+
+        except Exception as e:
+            logging.error(f"크롤링 상태 조회 실패: {e}")
+            return {
+                'exists': False,
+                'table_name': table_name if 'table_name' in locals() else '',
+                'total_stocks': 0,
+                'total_themes': 0,
+                'last_update': None,
+                'is_complete': False,
+                'error': str(e)
+            }

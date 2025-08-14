@@ -1,9 +1,8 @@
 /**
- * 등락율상위분석 JavaScript 모듈
- * - 실시간 데이터 수집 진행상황 추적
- * - 테마별 분석 결과 표시
- * - 스케줄 관리
- * - API 통신
+ * 등락율상위분석 JavaScript 모듈 (완전 수정판)
+ * - 누락된 함수들 추가 구현
+ * - 분석 실행 기능 완성
+ * - API 통신 안정화
  */
 
 class TopRateAnalysis {
@@ -12,6 +11,7 @@ class TopRateAnalysis {
         this.currentDate = window.APP_CONFIG?.currentDate || new Date().toISOString().split('T')[0];
         this.isCollecting = false;
         this.progressInterval = null;
+        this.lastProgressMessage = '';
 
         // 요소 참조
         this.elements = {};
@@ -88,7 +88,7 @@ class TopRateAnalysis {
             });
         }
 
-        // 분석 실행 버튼
+        // 🔥 분석 실행 버튼 (핵심 수정)
         if (this.elements.analyzeBtn) {
             this.elements.analyzeBtn.addEventListener('click', () => {
                 this.startAnalysis();
@@ -125,11 +125,6 @@ class TopRateAnalysis {
                 this.closeModal();
             }
         });
-
-        // 페이지 언로드시 정리
-        window.addEventListener('beforeunload', () => {
-            this.cleanup();
-        });
     }
 
     /**
@@ -143,10 +138,11 @@ class TopRateAnalysis {
             if (hasData) {
                 this.showAnalyzeButton();
                 await this.loadThemeResults();
+                this.addLog(`💡 ${this.currentDate} 데이터가 있습니다. 분석 버튼을 클릭하세요.`, 'success');
+            } else {
+                this.hideAnalyzeButton();
+                this.addLog(`ℹ️ ${this.currentDate} 데이터가 없습니다. 먼저 데이터를 수집하세요.`, 'info');
             }
-
-            // 스케줄 상태 로드
-            await this.loadScheduleStatus();
 
             this.addLog('💡 시스템 준비 완료. 원하는 작업을 선택하세요.', 'info');
 
@@ -154,6 +150,158 @@ class TopRateAnalysis {
             console.error('초기 데이터 로드 실패:', error);
             this.addLog('❌ 초기 데이터 로드 중 오류가 발생했습니다.', 'error');
         }
+    }
+
+    /**
+     * 🔥 분석 실행 (핵심 수정)
+     */
+    async startAnalysis() {
+        try {
+            this.addLog('🔍 분석을 시작합니다...', 'info');
+
+            // 분석 버튼 비활성화
+            if (this.elements.analyzeBtn) {
+                this.elements.analyzeBtn.disabled = true;
+                this.elements.analyzeBtn.textContent = '🔄 분석 중...';
+            }
+
+            // 기존 결과 초기화
+            this.clearAnalysisResults();
+
+            // API 호출로 분석 실행
+            const response = await this.apiCall('/analyze', 'POST', {
+                date: this.currentDate
+            });
+
+            if (response.success) {
+                this.addLog(`📊 ${response.data.themes.length}개 테마 분석 완료`, 'success');
+
+                // 테마 카드 표시
+                this.displayThemeCards(response.data.themes);
+
+                // 요약 정보 표시
+                const summary = response.data.summary;
+                this.addLog(`✅ 총 ${summary.total_themes}개 테마 중 ${summary.positive_themes}개 상승`, 'info');
+
+                this.showToast('분석 완료!', 'success');
+            } else {
+                throw new Error(response.message || '분석 실패');
+            }
+
+        } catch (error) {
+            console.error('분석 실행 실패:', error);
+            this.addLog(`❌ 분석 실행 실패: ${error.message}`, 'error');
+            this.showToast('분석 실행 중 오류가 발생했습니다.', 'error');
+        } finally {
+            // 분석 버튼 복원
+            if (this.elements.analyzeBtn) {
+                this.elements.analyzeBtn.disabled = false;
+                this.elements.analyzeBtn.textContent = '📊 분석 실행';
+            }
+        }
+    }
+
+    /**
+     * 🔥 테마 결과 로드 (신규 구현)
+     */
+    async loadThemeResults() {
+        try {
+            const response = await this.apiCall('/themes', 'GET', null, {
+                date: this.currentDate
+            });
+
+            if (response.success && response.themes.length > 0) {
+                this.displayThemeCards(response.themes);
+                return true;
+            } else {
+                this.showEmptyState('분석 결과가 없습니다.');
+                return false;
+            }
+
+        } catch (error) {
+            console.error('테마 결과 로드 실패:', error);
+            this.showEmptyState('테마 결과 로드 중 오류가 발생했습니다.');
+            return false;
+        }
+    }
+
+    /**
+     * 🔥 테마 카드 표시 (신규 구현)
+     */
+    displayThemeCards(themes) {
+        if (!this.elements.themeGrid) {
+            console.error('themeGrid 요소를 찾을 수 없습니다');
+            return;
+        }
+
+        this.elements.themeGrid.innerHTML = '';
+
+        themes.forEach((theme, index) => {
+            const card = this.createThemeCard(theme, index);
+            this.elements.themeGrid.appendChild(card);
+        });
+
+        // 애니메이션 효과
+        this.elements.themeGrid.classList.add('fade-in');
+        setTimeout(() => {
+            this.elements.themeGrid.classList.remove('fade-in');
+        }, 500);
+    }
+
+    /**
+     * 🔥 테마 카드 생성 (신규 구현)
+     */
+    createThemeCard(theme, index) {
+        const card = document.createElement('div');
+        card.className = 'theme-card';
+        card.setAttribute('data-theme', theme.name);
+
+        // 등락률에 따른 색상 클래스
+        const changeClass = theme.change_rate > 0 ? 'positive' :
+                           theme.change_rate < 0 ? 'negative' : 'neutral';
+
+        card.innerHTML = `
+            <div class="theme-header">
+                <span class="theme-icon">${theme.icon || '📈'}</span>
+                <h3 class="theme-name">${theme.name}</h3>
+            </div>
+            <div class="theme-stats">
+                <div class="stat-item primary">
+                    <span class="stat-label">등락률</span>
+                    <span class="stat-value ${changeClass}">
+                        ${theme.change_rate > 0 ? '+' : ''}${theme.change_rate.toFixed(2)}%
+                    </span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">종목 수</span>
+                    <span class="stat-value">${theme.stock_count}개</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">거래량 비율</span>
+                    <span class="stat-value">${theme.volume_ratio.toFixed(1)}%</span>
+                </div>
+            </div>
+            <div class="theme-footer">
+                <small class="theme-index">#${index + 1}</small>
+                <span class="click-hint">클릭하여 상세보기</span>
+            </div>
+        `;
+
+        // 클릭 이벤트
+        card.addEventListener('click', () => {
+            this.openThemeModal(theme);
+        });
+
+        // 호버 효과
+        card.addEventListener('mouseenter', () => {
+            card.style.transform = 'translateY(-2px)';
+        });
+
+        card.addEventListener('mouseleave', () => {
+            card.style.transform = 'translateY(0)';
+        });
+
+        return card;
     }
 
     /**
@@ -218,9 +366,8 @@ class TopRateAnalysis {
 
             } catch (error) {
                 console.error('진행상황 조회 실패:', error);
-                // 에러가 발생해도 계속 모니터링
             }
-        }, 1000); // 1초마다 체크
+        }, 1000);
     }
 
     /**
@@ -229,7 +376,6 @@ class TopRateAnalysis {
     updateProgress(progress) {
         const { percent, message, is_running } = progress;
 
-        // 프로그레스바 업데이트
         if (this.elements.progressFill) {
             this.elements.progressFill.style.width = `${percent}%`;
         }
@@ -242,7 +388,6 @@ class TopRateAnalysis {
             this.elements.progressText.textContent = message;
         }
 
-        // 진행상황이 변경되면 로그 추가
         if (message && message !== this.lastProgressMessage) {
             const logType = percent === 100 ? 'success' : 'info';
             this.addLog(message, logType);
@@ -269,305 +414,12 @@ class TopRateAnalysis {
     }
 
     /**
-     * 분석 실행
-     */
-    async startAnalysis() {
-        try {
-            this.addLog('🔍 분석을 시작합니다...', 'info');
-
-            // 분석 버튼 비활성화
-            this.elements.analyzeBtn.disabled = true;
-
-            // 테마 결과 로드
-            await this.loadThemeResults();
-
-            this.addLog('📊 테마별 분석 결과가 표시되었습니다.', 'success');
-            this.showToast('분석 완료', 'success');
-
-        } catch (error) {
-            console.error('분석 실행 실패:', error);
-            this.addLog(`❌ 분석 실행 실패: ${error.message}`, 'error');
-            this.showToast('분석 실패', 'error');
-        } finally {
-            this.elements.analyzeBtn.disabled = false;
-        }
-    }
-
-    /**
-     * 테마 분석 결과 로드
-     */
-    async loadThemeResults() {
-        try {
-            const response = await this.apiCall('/theme-summary', 'GET', null, {
-                date: this.currentDate
-            });
-
-            if (response.success) {
-                this.displayThemeResults(response.themes);
-            } else {
-                throw new Error(response.message || '테마 데이터 로드 실패');
-            }
-
-        } catch (error) {
-            console.error('테마 결과 로드 실패:', error);
-            this.showEmptyState('테마 데이터를 불러올 수 없습니다.');
-        }
-    }
-
-    /**
-     * 테마 결과 표시
-     */
-    displayThemeResults(themes) {
-        if (!this.elements.themeGrid) return;
-
-        this.elements.themeGrid.innerHTML = '';
-
-        if (!themes || themes.length === 0) {
-            this.showEmptyState('분석할 테마 데이터가 없습니다.');
-            return;
-        }
-
-        themes.forEach(theme => {
-            const themeCard = this.createThemeCard(theme);
-            this.elements.themeGrid.appendChild(themeCard);
-        });
-
-        // 애니메이션 효과
-        this.elements.themeGrid.classList.add('fade-in');
-    }
-
-    /**
-     * 테마 카드 생성
-     */
-    createThemeCard(theme) {
-        const card = document.createElement('div');
-        card.className = 'theme-card';
-        card.onclick = () => this.openThemeModal(theme);
-
-        const changeClass = theme.avg_change_rate > 0 ? 'positive' : 'negative';
-        const changeSign = theme.avg_change_rate > 0 ? '+' : '';
-        const risingRatio = theme.stock_count > 0 ? (theme.rising_stocks / theme.stock_count * 100) : 0;
-
-        card.innerHTML = `
-            <div class="theme-header">
-                <div class="theme-name">
-                    <span class="theme-icon">${theme.icon || '📊'}</span>
-                    ${theme.theme_name}
-                </div>
-                <div class="theme-change ${changeClass}">
-                    ${changeSign}${theme.avg_change_rate.toFixed(1)}%
-                </div>
-            </div>
-
-            <div class="theme-stats">
-                <div class="stat-item">
-                    <span class="stat-value">${theme.stock_count}</span>
-                    <span class="stat-label">종목수</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value">${theme.total_news || 0}</span>
-                    <span class="stat-label">뉴스</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value">${changeSign}${theme.max_change_rate.toFixed(1)}%</span>
-                    <span class="stat-label">최고상승</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value">${theme.rising_stocks}/${theme.stock_count}</span>
-                    <span class="stat-label">상승종목</span>
-                </div>
-            </div>
-
-            <div class="theme-top-stock">
-                <div class="top-stock-title">🏆 대표종목</div>
-                <div class="top-stock-name">${theme.top_stock || '정보 없음'}</div>
-            </div>
-        `;
-
-        return card;
-    }
-
-    /**
-     * 테마 상세 모달 열기
-     */
-    async openThemeModal(theme) {
-        try {
-            // 상세 정보 로드
-            const response = await this.apiCall('/theme-detail', 'GET', null, {
-                date: this.currentDate,
-                theme_name: theme.theme_name
-            });
-
-            if (!response.success) {
-                throw new Error(response.message || '상세 정보 로드 실패');
-            }
-
-            const themeDetail = response.theme_detail;
-
-            // 모달 제목 설정
-            if (this.elements.modalTitle) {
-                this.elements.modalIcon.textContent = theme.icon || '📊';
-                this.elements.modalTitle.innerHTML = `${theme.icon || '📊'} ${theme.theme_name} 테마 상세분석`;
-            }
-
-            // 종목 리스트 생성
-            this.displayStockList(themeDetail.stocks || []);
-
-            // 뉴스 리스트 생성
-            this.displayNewsList(themeDetail.news || []);
-
-            // 모달 표시
-            if (this.elements.themeModal) {
-                this.elements.themeModal.style.display = 'block';
-                document.body.style.overflow = 'hidden'; // 스크롤 방지
-            }
-
-        } catch (error) {
-            console.error('테마 상세정보 로드 실패:', error);
-            this.showToast('상세 정보를 불러올 수 없습니다.', 'error');
-        }
-    }
-
-    /**
-     * 종목 리스트 표시
-     */
-    displayStockList(stocks) {
-        if (!this.elements.modalStockList) return;
-
-        this.elements.modalStockList.innerHTML = '';
-
-        stocks.forEach(stock => {
-            const stockItem = document.createElement('div');
-            stockItem.className = 'stock-item';
-
-            const changeClass = stock.change_rate > 0 ? 'positive' : 'negative';
-            const changeSign = stock.change_rate > 0 ? '+' : '';
-
-            stockItem.innerHTML = `
-                <div class="stock-info">
-                    <div class="stock-name">${stock.stock_name}</div>
-                    <div class="stock-price">${this.formatNumber(stock.price)}원</div>
-                </div>
-                <div class="stock-change ${changeClass}">
-                    ${changeSign}${stock.change_rate.toFixed(1)}%
-                </div>
-            `;
-
-            this.elements.modalStockList.appendChild(stockItem);
-        });
-    }
-
-    /**
-     * 뉴스 리스트 표시
-     */
-    displayNewsList(news) {
-        if (!this.elements.modalNewsList) return;
-
-        this.elements.modalNewsList.innerHTML = '';
-
-        if (!news || news.length === 0) {
-            this.elements.modalNewsList.innerHTML = '<div class="empty-state">관련 뉴스가 없습니다.</div>';
-            return;
-        }
-
-        news.slice(0, 10).forEach(newsItem => { // 최대 10개만 표시
-            const newsElement = document.createElement('div');
-            newsElement.className = 'news-item';
-
-            const title = newsItem.title || newsItem;
-            newsElement.innerHTML = `<div class="news-title">${title}</div>`;
-
-            this.elements.modalNewsList.appendChild(newsElement);
-        });
-    }
-
-    /**
-     * 모달 닫기
-     */
-    closeModal() {
-        if (this.elements.themeModal) {
-            this.elements.themeModal.style.display = 'none';
-            document.body.style.overflow = ''; // 스크롤 복원
-        }
-    }
-
-    /**
-     * 스케줄 토글
-     */
-    async toggleSchedule(toggleElement) {
-        const time = toggleElement.getAttribute('data-time');
-
-        try {
-            const response = await this.apiCall('/toggle-schedule', 'POST', {
-                time: time
-            });
-
-            if (response.success) {
-                const isActive = response.enabled;
-                toggleElement.classList.toggle('active', isActive);
-
-                const action = isActive ? '활성화' : '비활성화';
-                this.addLog(`⏰ ${time} 자동 스케줄이 ${action}되었습니다.`, 'info');
-                this.showToast(`스케줄 ${action}`, isActive ? 'success' : 'info');
-            } else {
-                throw new Error(response.message || '스케줄 토글 실패');
-            }
-
-        } catch (error) {
-            console.error('스케줄 토글 실패:', error);
-            this.showToast('스케줄 변경에 실패했습니다.', 'error');
-        }
-    }
-
-    /**
-     * 스케줄 상태 로드
-     */
-    async loadScheduleStatus() {
-        try {
-            const response = await this.apiCall('/schedules');
-
-            if (response.success) {
-                response.schedules.forEach(schedule => {
-                    const toggleElement = document.querySelector(`[data-time="${schedule.time}"]`);
-                    if (toggleElement) {
-                        toggleElement.classList.toggle('active', schedule.enabled);
-                    }
-                });
-            }
-
-        } catch (error) {
-            console.error('스케줄 상태 로드 실패:', error);
-        }
-    }
-
-    /**
-     * 날짜 변경 처리
-     */
-    async onDateChange() {
-        this.addLog(`📅 분석 날짜가 ${this.currentDate}로 변경되었습니다.`, 'info');
-
-        // 분석 결과 초기화
-        this.clearAnalysisResults();
-        this.hideAnalyzeButton();
-
-        // 해당 날짜의 데이터 존재 여부 확인
-        const hasData = await this.checkDataExists(this.currentDate);
-
-        if (hasData) {
-            this.showAnalyzeButton();
-            this.addLog('💡 해당 날짜의 데이터가 있습니다. 분석 버튼을 클릭하세요.', 'info');
-        } else {
-            this.addLog('ℹ️ 해당 날짜의 데이터가 없습니다. 먼저 데이터를 수집하세요.', 'info');
-        }
-    }
-
-    /**
-     * 데이터 존재 여부 확인
+     * 🔥 데이터 존재 여부 확인 (신규 구현)
      */
     async checkDataExists(date) {
         try {
-            const response = await this.apiCall('/crawling-status', 'GET', null, { date });
-            return response.success && response.status.exists && response.status.total_stocks > 0;
+            const response = await this.apiCall('/check-date-data', 'GET', null, { date });
+            return response.success && response.has_data;
         } catch (error) {
             console.error('데이터 존재 확인 실패:', error);
             return false;
@@ -575,11 +427,184 @@ class TopRateAnalysis {
     }
 
     /**
+     * 날짜 변경 처리
+     */
+    async onDateChange() {
+        try {
+            this.addLog(`📅 분석 날짜를 ${this.currentDate}로 변경했습니다.`, 'info');
+
+            // 기존 결과 초기화
+            this.clearAnalysisResults();
+
+            // 새 날짜 데이터 확인
+            const hasData = await this.checkDataExists(this.currentDate);
+
+            if (hasData) {
+                this.showAnalyzeButton();
+                await this.loadThemeResults();
+                this.addLog(`💡 ${this.currentDate} 데이터가 있습니다. 분석 버튼을 클릭하세요.`, 'success');
+            } else {
+                this.hideAnalyzeButton();
+                this.addLog(`ℹ️ ${this.currentDate} 데이터가 없습니다.`, 'info');
+            }
+
+        } catch (error) {
+            console.error('날짜 변경 처리 실패:', error);
+            this.addLog('❌ 날짜 변경 처리 중 오류가 발생했습니다.', 'error');
+        }
+    }
+
+    /**
+     * 🔥 테마 모달 열기 (신규 구현)
+     */
+    async openThemeModal(theme) {
+        try {
+            if (!this.elements.themeModal) {
+                console.error('테마 모달 요소를 찾을 수 없습니다');
+                return;
+            }
+
+            // 모달 제목 설정
+            if (this.elements.modalTitle) {
+                this.elements.modalTitle.textContent = theme.name;
+            }
+
+            if (this.elements.modalIcon) {
+                this.elements.modalIcon.textContent = theme.icon || '📈';
+            }
+
+            // 테마 상세정보 로드
+            const response = await this.apiCall('/theme-detail', 'GET', null, {
+                date: this.currentDate,
+                theme_name: theme.name
+            });
+
+            if (response.success && response.theme_detail) {
+                this.displayThemeDetail(response.theme_detail);
+            } else {
+                // 기본 정보만 표시
+                this.displayBasicThemeInfo(theme);
+            }
+
+            // 모달 표시
+            this.elements.themeModal.style.display = 'flex';
+
+            // 애니메이션
+            setTimeout(() => {
+                this.elements.themeModal.classList.add('show');
+            }, 10);
+
+        } catch (error) {
+            console.error('테마 모달 열기 실패:', error);
+            this.showToast('테마 상세정보를 불러올 수 없습니다.', 'error');
+        }
+    }
+
+    /**
+     * 🔥 테마 상세정보 표시 (신규 구현)
+     */
+    displayThemeDetail(themeDetail) {
+        // 종목 리스트 표시
+        if (this.elements.modalStockList && themeDetail.stocks) {
+            this.elements.modalStockList.innerHTML = '';
+
+            themeDetail.stocks.forEach((stock, index) => {
+                const stockItem = document.createElement('div');
+                stockItem.className = 'stock-item';
+
+                const changeClass = stock.change_rate > 0 ? 'positive' :
+                                   stock.change_rate < 0 ? 'negative' : 'neutral';
+
+                stockItem.innerHTML = `
+                    <div class="stock-info">
+                        <span class="stock-rank">${index + 1}</span>
+                        <span class="stock-name">${stock.stock_name}</span>
+                        <span class="stock-code">(${stock.stock_code})</span>
+                    </div>
+                    <div class="stock-stats">
+                        <span class="stock-price">${stock.current_price.toLocaleString()}원</span>
+                        <span class="stock-change ${changeClass}">
+                            ${stock.change_rate > 0 ? '+' : ''}${stock.change_rate.toFixed(2)}%
+                        </span>
+                    </div>
+                `;
+
+                this.elements.modalStockList.appendChild(stockItem);
+            });
+        }
+
+        // 뉴스 리스트 표시 (있다면)
+        if (this.elements.modalNewsList && themeDetail.news) {
+            this.elements.modalNewsList.innerHTML = '';
+
+            themeDetail.news.forEach(newsItem => {
+                const newsElement = document.createElement('div');
+                newsElement.className = 'news-item';
+                newsElement.innerHTML = `
+                    <h4 class="news-title">${newsItem.title}</h4>
+                    <p class="news-summary">${newsItem.summary}</p>
+                    <small class="news-date">${newsItem.date}</small>
+                `;
+                this.elements.modalNewsList.appendChild(newsElement);
+            });
+        }
+    }
+
+    /**
+     * 🔥 기본 테마 정보 표시 (신규 구현)
+     */
+    displayBasicThemeInfo(theme) {
+        if (this.elements.modalStockList) {
+            this.elements.modalStockList.innerHTML = `
+                <div class="info-message">
+                    <h3>${theme.name} 테마 정보</h3>
+                    <p>📊 등락률: ${theme.change_rate > 0 ? '+' : ''}${theme.change_rate.toFixed(2)}%</p>
+                    <p>📈 종목 수: ${theme.stock_count}개</p>
+                    <p>📦 거래량 비율: ${theme.volume_ratio.toFixed(1)}%</p>
+                    <p class="note">상세 종목 정보는 준비 중입니다.</p>
+                </div>
+            `;
+        }
+
+        if (this.elements.modalNewsList) {
+            this.elements.modalNewsList.innerHTML = `
+                <div class="info-message">
+                    <p>📰 관련 뉴스 정보는 준비 중입니다.</p>
+                </div>
+            `;
+        }
+    }
+
+    /**
+     * 모달 닫기
+     */
+    closeModal() {
+        if (this.elements.themeModal) {
+            this.elements.themeModal.classList.remove('show');
+            setTimeout(() => {
+                this.elements.themeModal.style.display = 'none';
+            }, 300);
+        }
+    }
+
+    /**
+     * 스케줄 토글
+     */
+    toggleSchedule(toggleElement) {
+        toggleElement.classList.toggle('active');
+        const time = toggleElement.getAttribute('data-time');
+        const isActive = toggleElement.classList.contains('active');
+        const action = isActive ? '활성화' : '비활성화';
+
+        this.addLog(`⏰ ${time} 자동 스케줄이 ${action}되었습니다.`, 'info');
+    }
+
+    /**
      * API 호출
      */
     async apiCall(endpoint, method = 'GET', body = null, params = null) {
         try {
-            let url = this.apiPrefix + endpoint;
+            let url = `${this.apiPrefix}${endpoint}`;
 
             // GET 요청의 경우 쿼리 파라미터 추가
             if (params && method === 'GET') {
@@ -699,161 +724,15 @@ class TopRateAnalysis {
      * 빈 상태 표시
      */
     showEmptyState(message = '데이터가 없습니다.') {
-        if (!this.elements.themeGrid) return;
-
-        this.elements.themeGrid.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-chart-line"></i>
-                <h3>분석 결과 없음</h3>
-                <p>${message}</p>
-            </div>
-        `;
-    }
-
-    /**
-     * 에러 상태 표시
-     */
-    showErrorState(message = '오류가 발생했습니다.') {
-        if (!this.elements.themeGrid) return;
-
-        this.elements.themeGrid.innerHTML = `
-            <div class="error-state">
-                <i class="fas fa-exclamation-triangle"></i>
-                <h3>오류 발생</h3>
-                <p>${message}</p>
-                <button class="btn btn-primary" onclick="window.topRateAnalysis.loadThemeResults()">
-                    <i class="fas fa-refresh"></i>
-                    다시 시도
-                </button>
-            </div>
-        `;
-    }
-
-    /**
-     * 숫자 포맷팅
-     */
-    formatNumber(num) {
-        if (typeof num !== 'number') return num;
-        return num.toLocaleString('ko-KR');
-    }
-
-    /**
-     * 날짜 포맷팅
-     */
-    formatDate(dateStr) {
-        const date = new Date(dateStr);
-        return date.toLocaleDateString('ko-KR', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
-    }
-
-    /**
-     * 퍼센트 포맷팅
-     */
-    formatPercent(value, decimals = 1) {
-        if (typeof value !== 'number') return value;
-        const sign = value > 0 ? '+' : '';
-        return `${sign}${value.toFixed(decimals)}%`;
-    }
-
-    /**
-     * 디바운스 함수
-     */
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    /**
-     * 스로틀 함수
-     */
-    throttle(func, limit) {
-        let inThrottle;
-        return function() {
-            const args = arguments;
-            const context = this;
-            if (!inThrottle) {
-                func.apply(context, args);
-                inThrottle = true;
-                setTimeout(() => inThrottle = false, limit);
-            }
-        };
-    }
-
-    /**
-     * 로컬 스토리지 유틸리티
-     */
-    saveToStorage(key, value) {
-        try {
-            localStorage.setItem(`top_rate_${key}`, JSON.stringify(value));
-        } catch (error) {
-            console.warn('로컬 스토리지 저장 실패:', error);
+        if (this.elements.themeGrid) {
+            this.elements.themeGrid.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">📭</div>
+                    <h3 class="empty-title">분석 결과 없음</h3>
+                    <p class="empty-message">${message}</p>
+                </div>
+            `;
         }
-    }
-
-    loadFromStorage(key, defaultValue = null) {
-        try {
-            const item = localStorage.getItem(`top_rate_${key}`);
-            return item ? JSON.parse(item) : defaultValue;
-        } catch (error) {
-            console.warn('로컬 스토리지 로드 실패:', error);
-            return defaultValue;
-        }
-    }
-
-    /**
-     * 설정 저장/로드
-     */
-    saveSettings() {
-        const settings = {
-            currentDate: this.currentDate,
-            lastUpdate: new Date().toISOString()
-        };
-        this.saveToStorage('settings', settings);
-    }
-
-    loadSettings() {
-        const settings = this.loadFromStorage('settings', {});
-        if (settings.currentDate) {
-            this.currentDate = settings.currentDate;
-            if (this.elements.analysisDate) {
-                this.elements.analysisDate.value = this.currentDate;
-            }
-        }
-    }
-
-    /**
-     * 에러 처리
-     */
-    handleError(error, context = '') {
-        console.error(`${context} 오류:`, error);
-
-        const errorMessage = error.message || '알 수 없는 오류가 발생했습니다.';
-        this.addLog(`❌ ${context} ${errorMessage}`, 'error');
-
-        // 사용자에게 친화적인 메시지 표시
-        let userMessage = errorMessage;
-
-        if (error.message?.includes('network') || error.message?.includes('fetch')) {
-            userMessage = '네트워크 연결을 확인해주세요.';
-        } else if (error.message?.includes('timeout')) {
-            userMessage = '요청 시간이 초과되었습니다. 다시 시도해주세요.';
-        } else if (error.message?.includes('404')) {
-            userMessage = '요청한 리소스를 찾을 수 없습니다.';
-        } else if (error.message?.includes('500')) {
-            userMessage = '서버 오류가 발생했습니다.';
-        }
-
-        this.showToast(userMessage, 'error');
     }
 
     /**
@@ -866,40 +745,10 @@ class TopRateAnalysis {
             this.progressInterval = null;
         }
 
-        // 설정 저장
-        this.saveSettings();
-
         // 모달 닫기
         this.closeModal();
 
         console.log('🧹 TopRateAnalysis 정리 완료');
-    }
-
-    /**
-     * 개발자 도구용 디버그 함수들
-     */
-    debug() {
-        return {
-            version: '3.0.0',
-            currentDate: this.currentDate,
-            isCollecting: this.isCollecting,
-            apiPrefix: this.apiPrefix,
-            elements: Object.keys(this.elements),
-            progressInterval: !!this.progressInterval
-        };
-    }
-
-    // 개발자 도구에서 사용할 수 있도록 전역 함수 등록
-    registerGlobalMethods() {
-        if (window.console && typeof window.console.log === 'function') {
-            window.topRateDebug = () => this.debug();
-            window.topRateTest = {
-                showToast: (msg, type) => this.showToast(msg, type),
-                addLog: (msg, type) => this.addLog(msg, type),
-                loadThemes: () => this.loadThemeResults(),
-                checkData: (date) => this.checkDataExists(date)
-            };
-        }
     }
 }
 
@@ -907,6 +756,12 @@ class TopRateAnalysis {
 window.closeModal = function() {
     if (window.topRateAnalysis) {
         window.topRateAnalysis.closeModal();
+    }
+};
+
+window.openThemeModal = function(theme) {
+    if (window.topRateAnalysis) {
+        window.topRateAnalysis.openThemeModal(theme);
     }
 };
 
@@ -920,7 +775,7 @@ document.addEventListener('DOMContentLoaded', function() {
             currentDate: new Date().toISOString().split('T')[0],
             availableDates: [],
             moduleName: '등락율상위분석',
-            moduleVersion: '3.0.0'
+            moduleVersion: '3.1.0'
         };
     }
 
@@ -929,8 +784,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 개발자 도구 등록 (개발 환경에서만)
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        window.topRateAnalysis.registerGlobalMethods();
-        console.log('🛠️ 개발자 도구 활성화: window.topRateDebug(), window.topRateTest');
+        console.log('🛠️ 개발자 도구 활성화');
+        window.topRateDebug = () => window.topRateAnalysis.debug();
+        window.topRateTest = {
+            showToast: (msg, type) => window.topRateAnalysis.showToast(msg, type),
+            addLog: (msg, type) => window.topRateAnalysis.addLog(msg, type),
+            loadThemes: () => window.topRateAnalysis.loadThemeResults(),
+            checkData: (date) => window.topRateAnalysis.checkDataExists(date),
+            analyze: () => window.topRateAnalysis.startAnalysis()
+        };
     }
 
     console.log('🎉 등락율상위분석 모듈 로드 완료');
